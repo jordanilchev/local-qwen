@@ -22,16 +22,18 @@ WARMUPS = 2
 RUNS = 5
 MAX_TOKENS = 200
 
+# Labels include model size, architecture, and quant type for clarity.
+# Ollama: quant is part of the tag name (q4 = Q4_K_M, :27b = default Ollama quant)
 OLLAMA_MODELS = [
-    "qwen3.6:27b",
-    "qwen3.6-uncensored:35b-q4",
+    ("Qwen3.6-27B-dense  [Ollama-default]",    "qwen3.6:27b"),
+    ("Qwen3.6-35B-MoE    [GGUF-Q4_K_P]",       "qwen3.6-uncensored:35b-q4"),
 ]
 
 # Each entry: (label, mlx_model_ref)
 # Models are benchmarked sequentially; each loads/unloads independently.
 MLX_MODELS = [
-    ("27B-4bit",       "mlx-community/Qwen3.5-27B-4bit"),
-    ("35B-A3B-4bit-DWQ", "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"),
+    ("Qwen3.5-27B-dense  [MLX-int4]",        "mlx-community/Qwen3.5-27B-4bit"),
+    ("Qwen3.6-35B-MoE    [MLX-int4-DWQ]",    "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"),
 ]
 
 PROMPT = (
@@ -138,12 +140,12 @@ print("=" * 62, flush=True)
 print("  PHASE 1: Ollama models (unloaded before MLX loads)", flush=True)
 print("=" * 62, flush=True)
 
-for ollama_model in OLLAMA_MODELS:
+for label, ollama_model in OLLAMA_MODELS:
     med = run_suite(
-        f"Ollama  {ollama_model}",
+        f"Ollama  {label}",
         lambda m=ollama_model: bench_ollama(m),
     )
-    results.append((f"Ollama  {ollama_model}", med))
+    results.append((f"Ollama  {label}", med))
     print(f"\n  Unloading {ollama_model}...", end=" ", flush=True)
     ollama_unload(ollama_model)
     print("done", flush=True)
