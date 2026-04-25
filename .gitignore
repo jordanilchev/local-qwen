@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 *.egg-info/
 .env
+.DS_Store
+*.safetensors
+*.npz
+*.npy
+*.gguf
+dist/
+build/
+.pytest_cache/
