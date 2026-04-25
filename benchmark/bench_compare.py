@@ -9,6 +9,10 @@ Usage:
 import os, time, json, urllib.request
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
+from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
+from ddtree_mlx.runtime import generate_ddtree_once
+from mlx_lm import generate as mlx_generate
+
 RUNS = 3
 MAX_TOKENS = 200
 OLLAMA_MODEL = "qwen3.6:27b"
@@ -46,14 +50,9 @@ def bench_ollama() -> tuple[float, float]:
     out_tps = gt / (gns / 1e9) if gns > 0 else 0.0
     return out_tps, ttft_ms
 
-# ── MLX (plain) ───────────────────────────────────────────────────────────────
-
-def load_mlx():
-    from mlx_lm import load as mlx_load
-    return mlx_load(MLX_MODEL)
+# ── MLX (plain) — reuses target_model loaded by load_runtime_components ───────
 
 def bench_plain(model, tokenizer) -> tuple[float, float]:
-    from mlx_lm import generate as mlx_generate
     messages = [{"role": "user", "content": PROMPT}]
     prompt_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     t0 = time.perf_counter()
@@ -64,14 +63,7 @@ def bench_plain(model, tokenizer) -> tuple[float, float]:
 
 # ── DDTree ────────────────────────────────────────────────────────────────────
 
-def load_ddtree():
-    from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
-    target, tok, draft, _ = load_runtime_components(model_ref=MLX_MODEL, draft_ref=None)
-    stop_ids = get_stop_token_ids(tok)
-    return target, tok, draft, stop_ids
-
 def bench_ddtree(target, tokenizer, draft, stop_ids) -> tuple[float, float]:
-    from ddtree_mlx.runtime import generate_ddtree_once
     prompt_tokens = list(tokenizer.apply_chat_template(
         [{"role": "user", "content": PROMPT}],
         tokenize=True, add_generation_prompt=True,
@@ -104,9 +96,10 @@ def run_suite(label: str, warmup_fn, bench_fn) -> float:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-print("Loading MLX models (plain + DDTree share weights)...")
-plain_model, plain_tok = load_mlx()
-ddtree_target, ddtree_tok, ddtree_draft, ddtree_stop = load_ddtree()
+# Load once — target_model shared between plain MLX and DDTree (~19 GB total)
+print("Loading MLX models (~19 GB, loaded once)...")
+ddtree_target, ddtree_tok, ddtree_draft, _ = load_runtime_components(model_ref=MLX_MODEL, draft_ref=None)
+ddtree_stop = get_stop_token_ids(ddtree_tok)
 print("MLX models loaded.\n")
 
 results = []
@@ -119,11 +112,11 @@ avg = run_suite(
 )
 results.append(("Ollama  " + OLLAMA_MODEL, avg))
 
-# Plain MLX
+# Plain MLX (same target_model, no draft)
 avg = run_suite(
     f"Plain mlx_lm  {MLX_MODEL}",
-    lambda: bench_plain(plain_model, plain_tok),
-    lambda: bench_plain(plain_model, plain_tok),
+    lambda: bench_plain(ddtree_target, ddtree_tok),
+    lambda: bench_plain(ddtree_target, ddtree_tok),
 )
 results.append(("Plain mlx_lm", avg))
 

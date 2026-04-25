@@ -7,7 +7,7 @@ import os, time
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 import mlx.core as mx
-from mlx_lm import load as mlx_load, generate as mlx_generate
+from mlx_lm import generate as mlx_generate
 from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
 from ddtree_mlx.runtime import generate_ddtree_once
 
@@ -50,15 +50,14 @@ def bench_ddtree(target_model, tokenizer, draft_model) -> tuple[float, float]:
     return result["tokens_per_second"], result.get("acceptance_rate", float("nan"))
 
 
-print("Loading models...", flush=True)
-plain_model, plain_tokenizer = mlx_load(TARGET)
+print("Loading models (~19 GB, loaded once)...", flush=True)
 target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET, draft_ref=None)
 print("Models loaded.\n", flush=True)
 
 summary = []
 
 for label, fn in [
-    ("plain mlx_lm", lambda: bench_plain(plain_model, plain_tokenizer)),
+    ("plain mlx_lm", lambda: bench_plain(target_model, tokenizer)),
     ("DFlash+DDTree", lambda: bench_ddtree(target_model, tokenizer, draft_model)),
 ]:
     print(f"{'='*60}", flush=True)
