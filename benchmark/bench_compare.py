@@ -29,11 +29,11 @@ OLLAMA_MODELS = [
     ("Qwen3.6-35B-MoE    [GGUF-Q4_K_P]",       "qwen3.6-uncensored:35b-q4"),
 ]
 
-# Each entry: (label, mlx_model_ref)
-# Models are benchmarked sequentially; each loads/unloads independently.
+# Each entry: (label, mlx_model_ref, draft_ref)
+# draft_ref=None → auto-resolve from dflash registry; set explicitly when not in registry.
 MLX_MODELS = [
-    ("Qwen3.5-27B-dense  [MLX-int4]",        "mlx-community/Qwen3.5-27B-4bit"),
-    ("Qwen3.6-35B-MoE    [MLX-int4-DWQ]",    "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"),
+    ("Qwen3.5-27B-dense  [MLX-int4]",     "mlx-community/Qwen3.5-27B-4bit",          None),
+    ("Qwen3.6-35B-MoE    [MLX-int4-DWQ]", "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ", "z-lab/Qwen3.6-35B-A3B-DFlash"),
 ]
 
 PROMPT = (
@@ -159,9 +159,9 @@ print(f"{'='*62}", flush=True)
 from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
 import gc
 
-for label, mlx_ref in MLX_MODELS:
+for label, mlx_ref, explicit_draft in MLX_MODELS:
     print(f"\nLoading {mlx_ref}...", flush=True)
-    target, tok, draft, _ = load_runtime_components(model_ref=mlx_ref, draft_ref=None)
+    target, tok, draft, _ = load_runtime_components(model_ref=mlx_ref, draft_ref=explicit_draft)
     stop = get_stop_token_ids(tok)
     print("Loaded.", flush=True)
 
