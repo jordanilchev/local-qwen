@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """
-Benchmark: plain mlx_lm vs DFlash vs DFlash+DDTree on Qwen3.5-27B-4bit.
+Benchmark: plain mlx_lm vs DFlash+DDTree on Qwen3.5-27B-4bit.
+
+Timing convention: output tok/s (generation time only, prefill excluded).
+  - Plain MLX:  stream_generate, clock starts at first emitted token
+  - DDTree:     generation_tokens / (elapsed_us - prefill_us)
+
 Usage: HF_HOME=~/Models/HuggingFace .venv/bin/python benchmark/bench_ddtree.py
 """
-import os, time
+import os, time, statistics
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
-import mlx.core as mx
-from mlx_lm import generate as mlx_generate
+from mlx_lm import stream_generate
 from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
 from ddtree_mlx.runtime import generate_ddtree_once
 
 TARGET = "mlx-community/Qwen3.5-27B-4bit"
-RUNS = 3
+WARMUPS = 2
+RUNS = 5
 MAX_TOKENS = 200
 TREE_BUDGET = 4
 
@@ -24,12 +29,17 @@ PROMPT = (
 
 def bench_plain(model, tokenizer) -> float:
     messages = [{"role": "user", "content": PROMPT}]
-    prompt_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    t0 = time.perf_counter()
-    out = mlx_generate(model, tokenizer, prompt=prompt_str, max_tokens=MAX_TOKENS, verbose=False)
-    elapsed = time.perf_counter() - t0
-    tokens = len(tokenizer.encode(out))
-    return tokens / elapsed
+    prompt_str = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    t0 = None
+    count = 0
+    for _ in stream_generate(model, tokenizer, prompt=prompt_str, max_tokens=MAX_TOKENS):
+        if t0 is None:
+            t0 = time.perf_counter()
+        count += 1
+    elapsed = time.perf_counter() - t0 if t0 else 0.0
+    return count / elapsed if elapsed > 0 else 0.0
 
 
 def bench_ddtree(target_model, tokenizer, draft_model) -> tuple[float, float]:
@@ -47,26 +57,31 @@ def bench_ddtree(target_model, tokenizer, draft_model) -> tuple[float, float]:
         tree_budget=TREE_BUDGET,
         stop_token_ids=get_stop_token_ids(tokenizer),
     )
-    return result["tokens_per_second"], result.get("acceptance_rate", float("nan"))
+    gen_time_s = (result["elapsed_us"] - result["prefill_us"]) / 1e6
+    tps = result["generation_tokens"] / gen_time_s if gen_time_s > 0 else 0.0
+    return tps, result.get("avg_acceptance", float("nan"))
 
 
 print("Loading models (~19 GB, loaded once)...", flush=True)
-target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET, draft_ref=None)
+target_model, tokenizer, draft_model, _ = load_runtime_components(
+    model_ref=TARGET, draft_ref=None
+)
 print("Models loaded.\n", flush=True)
 
 summary = []
 
 for label, fn in [
-    ("plain mlx_lm", lambda: bench_plain(target_model, tokenizer)),
-    ("DFlash+DDTree", lambda: bench_ddtree(target_model, tokenizer, draft_model)),
+    ("plain mlx_lm", lambda m=target_model, t=tokenizer: bench_plain(m, t)),
+    ("DFlash+DDTree", lambda m=target_model, t=tokenizer, d=draft_model: bench_ddtree(m, t, d)),
 ]:
     print(f"{'='*60}", flush=True)
     print(f"  {label}", flush=True)
     print(f"{'='*60}", flush=True)
 
-    print("  [warmup]...", end=" ", flush=True)
-    fn()
-    print("done", flush=True)
+    for w in range(1, WARMUPS + 1):
+        print(f"  [warmup {w}/{WARMUPS}]...", end=" ", flush=True)
+        fn()
+        print("done", flush=True)
 
     runs = []
     for i in range(1, RUNS + 1):
@@ -80,15 +95,14 @@ for label, fn in [
         acc_str = f"  accept {acc:.0%}" if acc == acc else ""
         print(f"{tps:.1f} tok/s{acc_str}", flush=True)
 
-    avg_tps = sum(r[0] for r in runs) / RUNS
+    med_tps = statistics.median(r[0] for r in runs)
     valid_accs = [r[1] for r in runs if r[1] == r[1]]
     avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else float("nan")
-    summary.append((label, avg_tps, avg_acc))
-
-    print(f"  AVG: {avg_tps:.1f} tok/s\n", flush=True)
+    summary.append((label, med_tps, avg_acc))
+    print(f"  MEDIAN: {med_tps:.1f} tok/s\n", flush=True)
 
 print(f"\n{'='*60}")
-print(f"  SUMMARY  ({RUNS} runs, post-warmup, {MAX_TOKENS} max tokens)")
+print(f"  SUMMARY  ({WARMUPS} warmups · {RUNS} runs · median · output tok/s · {MAX_TOKENS} max tok)")
 print(f"{'='*60}")
 print(f"  {'Method':<20}  {'tok/s':>7}  {'speedup':>8}  {'accept':>8}")
 print(f"  {'-'*20}  {'-'*7}  {'-'*8}  {'-'*8}")
