@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ddtree-mlx"
+version = "0.1.0"
+description = "DDTree speculative decoding for Apple Silicon (MLX)"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx>=0.25.0",
+    "mlx-lm>=0.22.0",
+    "dflash-mlx",
+    "numpy",
+    "fastapi",
+    "uvicorn",
+]
+
+[tool.setuptools.packages.find]
+include = ["ddtree_mlx*"]
