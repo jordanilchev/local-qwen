@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-3-way benchmark: Ollama (qwen3.6:27b) vs plain mlx_lm vs DFlash+DDTree.
+Benchmark: multiple Ollama models vs plain mlx_lm vs DFlash+DDTree.
 Same prompt, same token budget, unified summary table.
 
 Timing convention: output tok/s (generation time only, prefill excluded).
@@ -8,21 +8,25 @@ Timing convention: output tok/s (generation time only, prefill excluded).
   - Plain MLX:  stream_generate, clock starts at first emitted token
   - DDTree:     generation_tokens / (elapsed_us - prefill_us)
 
+Memory safety: Ollama models are unloaded before MLX is loaded.
+  Peak during Ollama phase: up to 28 GB (35b-q5)
+  Peak during MLX phase:    ~19 GB
+
 Usage:
     HF_HOME=~/Models/HuggingFace .venv/bin/python benchmark/bench_compare.py
 """
 import os, time, json, urllib.request, statistics
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
-from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
-from ddtree_mlx.runtime import generate_ddtree_once
-from mlx_lm import stream_generate
-
 WARMUPS = 2
 RUNS = 5
 MAX_TOKENS = 200
-OLLAMA_MODEL = "qwen3.6:27b"
 MLX_MODEL = "mlx-community/Qwen3.5-27B-4bit"
+
+OLLAMA_MODELS = [
+    "qwen3.6:27b",
+    "qwen3.6-uncensored:35b-q4",
+]
 
 PROMPT = (
     "Implement a red-black tree in Python with insert, delete, and search methods. "
@@ -31,9 +35,9 @@ PROMPT = (
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
-def ollama_call(num_predict: int) -> dict:
+def ollama_call(model: str, num_predict: int) -> dict:
     payload = json.dumps({
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": PROMPT,
         "stream": False,
         "options": {"num_predict": num_predict, "temperature": 0},
@@ -46,8 +50,22 @@ def ollama_call(num_predict: int) -> dict:
     with urllib.request.urlopen(req, timeout=600) as r:
         return json.loads(r.read())
 
-def bench_ollama() -> float:
-    d = ollama_call(MAX_TOKENS)
+def ollama_unload(model: str) -> None:
+    """Evict model from Ollama's memory immediately."""
+    payload = json.dumps({"model": model, "keep_alive": 0}).encode()
+    req = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+    except Exception:
+        pass
+
+def bench_ollama(model: str) -> float:
+    d = ollama_call(model, MAX_TOKENS)
     gt  = d.get("eval_count", 0)
     gns = d.get("eval_duration", 1)
     return gt / (gns / 1e9) if gns > 0 else 0.0
@@ -55,6 +73,7 @@ def bench_ollama() -> float:
 # ── Plain MLX — clock starts at first emitted token ──────────────────────────
 
 def bench_plain(model, tokenizer) -> float:
+    from mlx_lm import stream_generate
     messages = [{"role": "user", "content": PROMPT}]
     prompt_str = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -71,6 +90,7 @@ def bench_plain(model, tokenizer) -> float:
 # ── DDTree — generation_tokens / generation_time (prefill excluded) ───────────
 
 def bench_ddtree(target, tokenizer, draft, stop_ids) -> float:
+    from ddtree_mlx.runtime import generate_ddtree_once
     prompt_tokens = list(tokenizer.apply_chat_template(
         [{"role": "user", "content": PROMPT}],
         tokenize=True, add_generation_prompt=True,
@@ -105,22 +125,38 @@ def run_suite(label: str, bench_fn) -> float:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-print("Loading MLX models (~19 GB, loaded once)...", flush=True)
+results = []
+
+# Phase 1: Ollama — run and unload each model before loading MLX
+print("=" * 62, flush=True)
+print("  PHASE 1: Ollama models (unloaded before MLX loads)", flush=True)
+print("=" * 62, flush=True)
+
+for ollama_model in OLLAMA_MODELS:
+    med = run_suite(
+        f"Ollama  {ollama_model}",
+        lambda m=ollama_model: bench_ollama(m),
+    )
+    results.append((f"Ollama  {ollama_model}", med))
+    print(f"\n  Unloading {ollama_model}...", end=" ", flush=True)
+    ollama_unload(ollama_model)
+    print("done", flush=True)
+
+# Phase 2: MLX — safe to load now that Ollama is unloaded
+print(f"\n{'='*62}", flush=True)
+print("  PHASE 2: MLX models (~19 GB)", flush=True)
+print(f"{'='*62}", flush=True)
+print(f"\nLoading MLX models...", flush=True)
+
+from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
 ddtree_target, ddtree_tok, ddtree_draft, _ = load_runtime_components(
     model_ref=MLX_MODEL, draft_ref=None
 )
 ddtree_stop = get_stop_token_ids(ddtree_tok)
-print("MLX models loaded.\n", flush=True)
-
-results = []
+print("MLX models loaded.", flush=True)
 
 results.append((
-    f"Ollama  {OLLAMA_MODEL}",
-    run_suite(f"Ollama  {OLLAMA_MODEL}", bench_ollama),
-))
-
-results.append((
-    "Plain mlx_lm",
+    "Plain mlx_lm  27B-4bit",
     run_suite(
         f"Plain mlx_lm  {MLX_MODEL}",
         lambda: bench_plain(ddtree_target, ddtree_tok),
@@ -128,7 +164,7 @@ results.append((
 ))
 
 results.append((
-    "DFlash+DDTree",
+    "DFlash+DDTree  27B-4bit",
     run_suite(
         f"DFlash+DDTree  {MLX_MODEL}",
         lambda: bench_ddtree(ddtree_target, ddtree_tok, ddtree_draft, ddtree_stop),
@@ -141,9 +177,9 @@ print(f"\n\n{'='*62}")
 print(f"  COMPARISON SUMMARY")
 print(f"  {WARMUPS} warmups · {RUNS} runs · median · output tok/s · {MAX_TOKENS} max tok")
 print(f"{'='*62}")
-print(f"  {'Method':<28}  {'tok/s':>7}  {'vs Ollama':>10}")
-print(f"  {'-'*28}  {'-'*7}  {'-'*10}")
+print(f"  {'Method':<32}  {'tok/s':>7}  {'vs #1':>8}")
+print(f"  {'-'*32}  {'-'*7}  {'-'*8}")
 for label, tps in results:
-    speedup = tps / baseline
-    print(f"  {label:<28}  {tps:7.1f}  {speedup:9.2f}×")
+    ratio = tps / baseline
+    print(f"  {label:<32}  {tps:7.1f}  {ratio:7.2f}×")
 print()
