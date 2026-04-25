@@ -6,7 +6,7 @@ Benchmarks and scripts for running large language models locally on Apple Silico
 
 | | |
 |---|---|
-| **Machine** | MacBook Air (Mac16,13) |
+| **Machine** | MacBook Air |
 | **Chip** | Apple M4 |
 | **Cores** | 10 (4 performance + 6 efficiency) |
 | **Unified Memory** | 32 GB |
