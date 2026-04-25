@@ -66,7 +66,7 @@ def bench_plain(model, tokenizer) -> tuple[float, float]:
 
 def load_ddtree():
     from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
-    target, tok, draft, _ = load_runtime_components(model_ref=MLX_MODEL)
+    target, tok, draft, _ = load_runtime_components(model_ref=MLX_MODEL, draft_ref=None)
     stop_ids = get_stop_token_ids(tok)
     return target, tok, draft, stop_ids
 

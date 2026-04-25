@@ -52,7 +52,7 @@ def bench_ddtree(target_model, tokenizer, draft_model) -> tuple[float, float]:
 
 print("Loading models...", flush=True)
 plain_model, plain_tokenizer = mlx_load(TARGET)
-target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET)
+target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET, draft_ref=None)
 print("Models loaded.\n", flush=True)
 
 summary = []

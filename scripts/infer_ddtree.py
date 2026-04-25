@@ -12,7 +12,7 @@ TREE_BUDGET = int(os.environ.get("TREE_BUDGET", "4"))
 
 
 def run(prompt: str) -> None:
-    target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET)
+    target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET, draft_ref=None)
 
     prompt_tokens = list(tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}],

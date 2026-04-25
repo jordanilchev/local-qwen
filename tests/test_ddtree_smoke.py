@@ -16,7 +16,7 @@ def test_short_inference():
     from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
     from ddtree_mlx.runtime import generate_ddtree_once
 
-    target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET)
+    target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET, draft_ref=None)
 
     prompt_tokens = list(tokenizer.apply_chat_template(
         [{"role": "user", "content": "Say hello in one word."}],
@@ -44,7 +44,7 @@ def test_result_keys():
     from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
     from ddtree_mlx.runtime import generate_ddtree_once
 
-    target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET)
+    target_model, tokenizer, draft_model, _ = load_runtime_components(model_ref=TARGET, draft_ref=None)
     prompt_tokens = list(tokenizer.apply_chat_template(
         [{"role": "user", "content": "1+1="}],
         tokenize=True,
