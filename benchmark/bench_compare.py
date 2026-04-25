@@ -21,11 +21,17 @@ os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 WARMUPS = 2
 RUNS = 5
 MAX_TOKENS = 200
-MLX_MODEL = "mlx-community/Qwen3.5-27B-4bit"
 
 OLLAMA_MODELS = [
     "qwen3.6:27b",
     "qwen3.6-uncensored:35b-q4",
+]
+
+# Each entry: (label, mlx_model_ref)
+# Models are benchmarked sequentially; each loads/unloads independently.
+MLX_MODELS = [
+    ("27B-4bit",       "mlx-community/Qwen3.5-27B-4bit"),
+    ("35B-A3B-4bit-DWQ", "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"),
 ]
 
 PROMPT = (
@@ -143,33 +149,39 @@ for ollama_model in OLLAMA_MODELS:
     print("done", flush=True)
 
 # Phase 2: MLX — safe to load now that Ollama is unloaded
+# Each model loads, benchmarks, then is deleted before the next loads.
 print(f"\n{'='*62}", flush=True)
-print("  PHASE 2: MLX models (~19 GB)", flush=True)
+print("  PHASE 2: MLX models (loaded one at a time)", flush=True)
 print(f"{'='*62}", flush=True)
-print(f"\nLoading MLX models...", flush=True)
 
 from dflash_mlx.generate import load_runtime_components, get_stop_token_ids
-ddtree_target, ddtree_tok, ddtree_draft, _ = load_runtime_components(
-    model_ref=MLX_MODEL, draft_ref=None
-)
-ddtree_stop = get_stop_token_ids(ddtree_tok)
-print("MLX models loaded.", flush=True)
+import gc
 
-results.append((
-    "Plain mlx_lm  27B-4bit",
-    run_suite(
-        f"Plain mlx_lm  {MLX_MODEL}",
-        lambda: bench_plain(ddtree_target, ddtree_tok),
-    ),
-))
+for label, mlx_ref in MLX_MODELS:
+    print(f"\nLoading {mlx_ref}...", flush=True)
+    target, tok, draft, _ = load_runtime_components(model_ref=mlx_ref, draft_ref=None)
+    stop = get_stop_token_ids(tok)
+    print("Loaded.", flush=True)
 
-results.append((
-    "DFlash+DDTree  27B-4bit",
-    run_suite(
-        f"DFlash+DDTree  {MLX_MODEL}",
-        lambda: bench_ddtree(ddtree_target, ddtree_tok, ddtree_draft, ddtree_stop),
-    ),
-))
+    results.append((
+        f"Plain mlx_lm  {label}",
+        run_suite(
+            f"Plain mlx_lm  {label}",
+            lambda m=target, t=tok: bench_plain(m, t),
+        ),
+    ))
+
+    results.append((
+        f"DFlash+DDTree  {label}",
+        run_suite(
+            f"DFlash+DDTree  {label}",
+            lambda m=target, t=tok, d=draft, s=stop: bench_ddtree(m, t, d, s),
+        ),
+    ))
+
+    # Free before loading next model
+    del target, tok, draft, stop
+    gc.collect()
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 baseline = results[0][1]
