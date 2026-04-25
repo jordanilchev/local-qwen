@@ -82,7 +82,8 @@ for label, fn in [
         print(f"{tps:.1f} tok/s{acc_str}", flush=True)
 
     avg_tps = sum(r[0] for r in runs) / RUNS
-    avg_acc = sum(r[1] for r in runs if r[1] == r[1]) / RUNS
+    valid_accs = [r[1] for r in runs if r[1] == r[1]]
+    avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else float("nan")
     summary.append((label, avg_tps, avg_acc))
 
     print(f"  AVG: {avg_tps:.1f} tok/s\n", flush=True)
