@@ -31,6 +31,16 @@ Results are split by model family so each table is a direct apples-to-apples com
 
 Memory: ~21.6 GB (20.7 GB model + 0.9 GB DFlash drafter)
 
+### Qwen 3.6 — 27B dense
+
+| Method | Quant | tok/s | vs Ollama |
+|--------|-------|------:|----------:|
+| DDTree (MLX) | TBD | TBD | TBD |
+| 🥇 Plain MLX | MLX-int4 | **6.7** | 1.86× |
+| Ollama | GGUF-Q4_K_M | 3.6 | 1.00× |
+
+Memory: TBD
+
 ### Qwen 3.5 — 27B dense
 
 | Method | Quant | tok/s | vs Ollama |
@@ -43,7 +53,7 @@ Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
 
 ### Key observations
 
-- **MLX vs Ollama:** MLX + Metal is ~2.2× faster than Ollama + llama.cpp on the same model (26.9 vs 12.3 tok/s on 35B MoE; 4.9 vs 3.8 tok/s on 27B dense).
+- **MLX vs Ollama:** MLX + Metal is up to ~2.2× faster than Ollama + llama.cpp on the same model (26.9 vs 12.3 tok/s on 35B MoE; 4.9 vs 3.8 tok/s on 27B dense).
 - **DDTree on top of MLX:** adds ~7% on the 35B MoE and ~12% on the 27B dense — smaller gain on MoE because generation is already fast. DDTree acceptance rate on 35B MoE: **369%** (3.7 draft tokens accepted per cycle).
 - **MoE vs dense (cross-family):** the 35B MoE runs at 26.9 tok/s vs 4.9 tok/s for the 27B dense under plain MLX — a 5.5× gap that is entirely architectural. MoE sparsity is a free lunch on Apple Silicon.
 
