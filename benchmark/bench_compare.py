@@ -25,8 +25,9 @@ MAX_TOKENS = 200
 # Labels include model size, architecture, and quant type for clarity.
 # Ollama: quant is part of the tag name (q4 = Q4_K_M, :27b = default Ollama quant)
 OLLAMA_MODELS = [
-    ("Qwen3.6-27B-dense  [GGUF-Q4_K_M]",       "qwen3.6:27b"),
-    ("Qwen3.6-35B-MoE    [GGUF-Q4_K_P]",       "qwen3.6-uncensored:35b-q4"),
+    ("Qwen3.6-27B-dense  [GGUF-Q4_K_M]",            "qwen3.6:27b"),
+    ("Qwen3.6-35B-MoE    [GGUF-Q4_K_M]",            "qwen3.6:35b"),
+    ("Qwen3.6-35B-MoE    [GGUF-Q4_K_M-uncensored]", "qwen3.6-uncensored:35b-q4"),
 ]
 
 # Each entry: (label, mlx_model_ref, draft_ref)

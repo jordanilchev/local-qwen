@@ -1,6 +1,6 @@
 # Local LLM Inference on Apple Silicon
 
-Benchmarks and scripts for running large language models locally on Apple Silicon using [MLX](https://github.com/ml-explore/mlx), [DFlash](https://github.com/humanrouter/dflash-mlx), and [DDTree](https://github.com/humanrouter/ddtree-mlx) speculative decoding — compared against [Ollama](https://ollama.com).
+Benchmarks and scripts for running large language models locally on Apple Silicon using [MLX](https://github.com/ml-explore/mlx), [DFlash](https://github.com/bstnxbt/dflash-mlx), and [DDTree](https://github.com/humanrouter/ddtree-mlx) speculative decoding — compared against [Ollama](https://ollama.com).
 
 ## Hardware
 
@@ -25,9 +25,10 @@ Results are split by model family so each table is a direct apples-to-apples com
 
 | Method | Quant | tok/s | vs Ollama | Source |
 |--------|-------|------:|----------:|--------|
-| 🥇 DDTree (MLX) | MLX-int4-DWQ | **28.7** | 2.33× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
-| 🥈 Plain MLX | MLX-int4-DWQ | 26.9 | 2.19× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
-| Ollama | GGUF-Q4_K_P | 12.3 | 1.00× | [HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive](https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive) |
+| 🥇 DDTree (MLX) | MLX-int4-DWQ | **28.7** | 2.08× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| 🥈 Plain MLX | MLX-int4-DWQ | 26.9 | 1.95× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| Ollama | GGUF-Q4_K_M | 13.8 | 1.00× | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) |
+| Ollama (uncensored) | GGUF-Q4_K_M | 12.3 | 0.89× | [HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive](https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive) |
 
 Memory: ~21.6 GB (20.7 GB model + 0.9 GB DFlash drafter)
 
@@ -37,6 +38,7 @@ Memory: ~21.6 GB (20.7 GB model + 0.9 GB DFlash drafter)
 |--------|-------|------:|----------:|--------|
 | DDTree (MLX) | TBD | TBD | TBD | [still wip 26.April](https://x.com/zhijianliu_/status/2048093433680859246?s=20) |
 | 🥇 Plain MLX | MLX-int4 | **6.7** | 1.86× | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
+| Plain MLX | MLX-OptiQ-4bit | 4.8 | 1.33× | [mlx-community/Qwen3.6-27B-OptiQ-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-OptiQ-4bit) |
 | Ollama | GGUF-Q4_K_M | 3.6 | 1.00× | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) |
 
 Memory: TBD
@@ -53,9 +55,10 @@ Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
 
 ### Key observations
 
-- **MLX vs Ollama:** MLX + Metal is up to ~2.2× faster than Ollama + llama.cpp on the same model (26.9 vs 12.3 tok/s on 35B MoE; 4.9 vs 3.8 tok/s on 27B dense).
+- **MLX vs Ollama:** MLX + Metal is up to ~2.1× faster than Ollama + llama.cpp on the same model (26.9 vs 13.8 tok/s on 35B MoE; 4.9 vs 3.8 tok/s on 27B dense).
 - **DDTree on top of MLX:** adds ~7% on the 35B MoE and ~12% on the 27B dense — smaller gain on MoE because generation is already fast. DDTree acceptance rate on 35B MoE: **369%** (3.7 draft tokens accepted per cycle).
 - **MoE vs dense (cross-family):** the 35B MoE runs at 26.9 tok/s vs 4.9 tok/s for the 27B dense under plain MLX — a 5.5× gap that is entirely architectural. MoE sparsity is a free lunch on Apple Silicon.
+- **OptiQ mixed precision is slower than uniform int4:** Qwen3.6-27B-OptiQ (4.5 BPW avg, 247 layers at 8-bit) runs at 4.8 tok/s vs 6.7 tok/s for uniform 4-bit — the heavier 8-bit layers reduce memory bandwidth efficiency faster than they improve quality.
 
 ---
 
@@ -65,7 +68,7 @@ Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
 
 - macOS Sequoia or Sonoma
 - [uv](https://github.com/astral-sh/uv) — fast Python package manager
-- ~40 GB free disk space (models)
+- Disk space: ~20 GB (best setup — 35B MoE MLX + drafter only) · ~40 GB (add Ollama comparison models) · ~80 GB (full suite — all MLX + all Ollama models)
 - Ollama installed (for Ollama comparisons only): https://ollama.com
 
 ### 1. Clone and set up the environment
