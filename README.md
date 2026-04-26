@@ -23,31 +23,31 @@ Results are split by model family so each table is a direct apples-to-apples com
 
 ### Qwen 3.6 — 35B MoE (3B active params/token)
 
-| Method | Quant | tok/s | vs Ollama |
-|--------|-------|------:|----------:|
-| 🥇 DDTree (MLX) | MLX-int4-DWQ | **28.7** | 2.33× |
-| 🥈 Plain MLX | MLX-int4-DWQ | 26.9 | 2.19× |
-| Ollama | GGUF-Q4_K_P | 12.3 | 1.00× |
+| Method | Quant | tok/s | vs Ollama | Source |
+|--------|-------|------:|----------:|--------|
+| 🥇 DDTree (MLX) | MLX-int4-DWQ | **28.7** | 2.33× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| 🥈 Plain MLX | MLX-int4-DWQ | 26.9 | 2.19× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| Ollama | GGUF-Q4_K_P | 12.3 | 1.00× | [HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive](https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive) |
 
 Memory: ~21.6 GB (20.7 GB model + 0.9 GB DFlash drafter)
 
 ### Qwen 3.6 — 27B dense
 
-| Method | Quant | tok/s | vs Ollama |
-|--------|-------|------:|----------:|
-| DDTree (MLX) | TBD | TBD | TBD |
-| 🥇 Plain MLX | MLX-int4 | **6.7** | 1.86× |
-| Ollama | GGUF-Q4_K_M | 3.6 | 1.00× |
+| Method | Quant | tok/s | vs Ollama | Source |
+|--------|-------|------:|----------:|--------|
+| DDTree (MLX) | TBD | TBD | TBD | [still wip 26.April](https://x.com/zhijianliu_/status/2048093433680859246?s=20) |
+| 🥇 Plain MLX | MLX-int4 | **6.7** | 1.86× | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
+| Ollama | GGUF-Q4_K_M | 3.6 | 1.00× | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) |
 
 Memory: TBD
 
 ### Qwen 3.5 — 27B dense
 
-| Method | Quant | tok/s | vs Ollama |
-|--------|-------|------:|----------:|
-| 🥇 DDTree (MLX) | MLX-int4 | **5.5** | 1.45× |
-| 🥈 Plain MLX | MLX-int4 | 4.9 | 1.29× |
-| Ollama | GGUF-Q4_K_M | 3.8 | 1.00× |
+| Method | Quant | tok/s | vs Ollama | Source |
+|--------|-------|------:|----------:|--------|
+| 🥇 DDTree (MLX) | MLX-int4 | **5.5** | 1.45× | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
+| 🥈 Plain MLX | MLX-int4 | 4.9 | 1.29× | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
+| Ollama | GGUF-Q4_K_M | 3.8 | 1.00× | [Qwen/Qwen3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B) |
 
 Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
 
