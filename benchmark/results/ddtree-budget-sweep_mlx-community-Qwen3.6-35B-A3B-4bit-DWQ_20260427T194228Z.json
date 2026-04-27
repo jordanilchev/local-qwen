@@ -1,0 +1,78 @@
+{
+  "ts": "20260427T194228Z",
+  "host": "M4-MBA-32GB",
+  "method": "ddtree-budget-sweep",
+  "model_label": "Qwen3.6-35B-MoE    [MLX-int4-DWQ]",
+  "model_ref": "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ",
+  "drafter_ref": "z-lab/Qwen3.6-35B-A3B-DFlash",
+  "tree_budget": 4,
+  "sampling": {
+    "temperature": 0,
+    "seed": 42,
+    "max_tokens": 200
+  },
+  "warmups": 2,
+  "runs_per_prompt": 5,
+  "results": [
+    {
+      "prompt": "code",
+      "ttft_ms_runs": [
+        227.794708,
+        230.345375,
+        230.81275,
+        229.495,
+        228.482875
+      ],
+      "decode_tps_runs": [
+        28.846435724370547,
+        28.982788711200552,
+        29.03976214982811,
+        28.82366428464148,
+        29.00803682164162
+      ],
+      "avg_acceptance": 3.6851851851851847,
+      "ttft_ms_median": 229.495,
+      "decode_tps_median": 28.982788711200552
+    },
+    {
+      "prompt": "prose",
+      "ttft_ms_runs": [
+        281.945375,
+        283.6925,
+        292.504125,
+        298.27408299999996,
+        297.181833
+      ],
+      "decode_tps_runs": [
+        24.430958941660712,
+        24.501888850611497,
+        24.160190033752897,
+        23.755519947680842,
+        23.30649813155516
+      ],
+      "avg_acceptance": 3.109375,
+      "ttft_ms_median": 292.504125,
+      "decode_tps_median": 24.160190033752897
+    },
+    {
+      "prompt": "json",
+      "ttft_ms_runs": [
+        299.19925,
+        302.663125,
+        307.854833,
+        322.314125,
+        308.137625
+      ],
+      "decode_tps_runs": [
+        27.206739027636928,
+        26.825435841460376,
+        26.423664372057363,
+        25.669133618775025,
+        24.954303859690835
+      ],
+      "avg_acceptance": 3.5535714285714284,
+      "ttft_ms_median": 307.854833,
+      "decode_tps_median": 26.423664372057363
+    }
+  ]
+}
