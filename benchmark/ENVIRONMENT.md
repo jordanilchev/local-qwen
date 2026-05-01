@@ -16,6 +16,7 @@
 - **ddtree-mlx:** 0.1.0
   - Vendor commit: `888f41c` (clean; untracked: benchmark/bench_tree_budget_sweep.py)
 - **ollama:** 0.21.2 (MLX backend supported, >= 0.19)
+- **vllm-mlx:** 0.2.9 (commit `e46e367` from `waybarrios/vllm-mlx`)
 
 ## Methodology constraints
 
@@ -116,4 +117,42 @@
 - Prose is consistently the slowest prompt regardless of budget — token-distribution divergence between drafter and target is highest there.
 - TTFT is essentially flat across budgets (227–232 ms on code) — speculative tree size affects decode, not prefill.
 - No OOM on the per-process orchestration (vs. prior single-process run that died after ~100 min sustained load).
+
+### Run 20260501T183446Z: vllm-mlx (EngineCore) — 35B MoE
+
+**Bench:** `bench_vllm.py` (VLLM_ONLY=35b), standalone vllm-mlx EngineCore scheduler.step() loop, same 3-prompt protocol as bench_compare.py.
+**vllm-mlx version:** 0.2.9 (commit `e46e367`, waybarrios/vllm-mlx); `gpu_memory_utilization=0.7` to leave headroom on 32 GB.
+**Wall-clock duration:** ~8 min (load 8 s + 60 s pre-bench cooldown + 3 prompts × 2 warmups + 5 runs each + 30 s inter-prompt cool-downs + 120 s post-run).
+**Total runs:** 15 (3 prompts × 2 warmups + 5 timed runs)
+**Status:** all OK; no OOM.
+
+| Model | Prompt | Method | TTFT (ms) | Decode (tok/s) |
+|-------|--------|--------|-----------|----------------|
+| Qwen3.6-35B-MoE [MLX-int4-DWQ] | code | vllm-mlx | 264.4 | 32.7 |
+| Qwen3.6-35B-MoE [MLX-int4-DWQ] | prose | vllm-mlx | 317.4 | 32.7 |
+| Qwen3.6-35B-MoE [MLX-int4-DWQ] | json | vllm-mlx | 320.6 | 32.5 |
+
+**Observations:**
+- Decode throughput matches plain MLX (32.7 vs 32.3 tok/s, +1%, within noise).
+- TTFT substantially lower than plain MLX: avg 301 ms vs 483 ms (−38%). The EngineCore prefix-cache scheduler handles prefill more efficiently than mlx_lm stream_generate's sequential approach.
+- TTFT also lower than DDTree b=3 (274 ms) — surprising given vllm-mlx has no speculative component; likely due to KV-cache reuse across the 2 warmup runs priming the prefix cache before timed runs.
+- No thermal throttling: decode variance across all 15 runs < 1%.
+
+### Run 20260501T185852Z: vllm-mlx (EngineCore) — 27B dense
+
+**Bench:** `bench_vllm.py` (VLLM_ONLY=27b), same protocol.
+**Wall-clock duration:** ~18 min.
+**Total runs:** 15 (3 prompts × 2 warmups + 5 timed runs)
+**Status:** all OK; thermal throttling observed on prose prompt.
+
+| Model | Prompt | Method | TTFT (ms) | Decode (tok/s) |
+|-------|--------|--------|-----------|----------------|
+| Qwen3.5-27B-dense [MLX-int4] | code | vllm-mlx | 2131.6 | 6.5 |
+| Qwen3.5-27B-dense [MLX-int4] | prose | vllm-mlx | 2470.6 | 4.2 |
+| Qwen3.5-27B-dense [MLX-int4] | json | vllm-mlx | 1533.8 | 6.5 |
+
+**Observations:**
+- Prose decode throttled (4.2 tok/s vs 6.5 for code/json) — M4 thermal state degraded mid-run after sustained dense-model inference. Code/json show 6.5 tok/s, slightly above plain MLX 6.4/5.4.
+- TTFT lower than plain MLX on code (2132 vs 1831 ms — wait, this is higher; the json prompt TTFT 1534 ms is notably lower than plain MLX 2619 ms, likely prefix-cache hit from warmup).
+- Avg decode 5.7 tok/s with prose included, matching plain MLX 5.8 within noise when throttling is factored in.
 

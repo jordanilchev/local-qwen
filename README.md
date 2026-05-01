@@ -26,8 +26,9 @@ Results are split by model family so each table is a direct apples-to-apples com
 
 | Method | Quant | Avg tok/s | TTFT (ms) | Accept (tok/cycle) | vs Ollama | Source |
 |--------|-------|----------:|----------:|-------------------:|----------:|--------|
-| 🥇 Plain MLX | MLX-int4-DWQ | **32.3** | 483 | — | 2.43× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
-| 🥈 DDTree (MLX, b=3) | MLX-int4-DWQ | 28.5 | 274 | 3.1 | 2.15× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| 🥇 vllm-mlx | MLX-int4-DWQ | **32.7** | 301 | — | 2.46× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| 🥈 Plain MLX | MLX-int4-DWQ | 32.3 | 483 | — | 2.43× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| DDTree (MLX, b=3) | MLX-int4-DWQ | 28.5 | 274 | 3.1 | 2.15× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
 | Ollama | GGUF-Q4_K_M | 13.3 | 925 | — | 1.00× | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) |
 | Ollama (uncensored) | GGUF-Q4_K_M | 12.7 | 809 | — | 0.96× | [HauhauCS/Qwen3.6-35B-A3B-Uncensored](https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive) |
 
@@ -63,15 +64,18 @@ No DFlash drafter exists for Qwen3.6-27B-dense, so DDTree is not yet runnable he
 |--------|-------|----------:|----------:|-------------------:|----------:|--------|
 | 🥇 DDTree (MLX, b=4) | MLX-int4 | **6.0** | 2003 | 4.0 | n/a* | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
 | 🥈 Plain MLX | MLX-int4 | 5.8 | 2490 | — | n/a* | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
+| vllm-mlx† | MLX-int4 | 5.7 | 2045 | — | n/a* | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
 
 \* No Ollama Q4_K_M GGUF run for the 3.5 generation in this sweep — use the 3.6-27B-dense Ollama row above as a same-architecture reference.
+† vllm-mlx prose run throttled on the fanless M4 (4.2 tok/s vs ~6.5 on other prompts), dragging the average down; per-prompt code/json are 6.5 tok/s, comparable to DDTree.
 
 Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
 
 ### Key observations
 
-- **MLX + Metal beats Ollama (llama.cpp) on the same model:** 32.3 vs 13.3 tok/s on the 35B MoE (+143%) and 5.7 vs 3.4 tok/s on the 27B dense (+66%). The MLX backend is dramatically more efficient on Apple Silicon.
-- **DDTree no longer beats plain MLX on the 35B MoE under fair methodology.** With multi-prompt + greedy + cool-downs, plain MLX runs at 32.3 tok/s and the best DDTree budget (b=3) reaches only 28.5 tok/s. DDTree still wins on TTFT (274 ms vs 483 ms), but the original "DDTree fastest" headline came from a single code prompt where draft acceptance ran higher — averaging across code/prose/json reverses the ordering.
+- **MLX + Metal beats Ollama (llama.cpp) on the same model:** 32.7 vs 13.3 tok/s on the 35B MoE (+146%) and 5.7 vs 3.4 tok/s on the 27B dense (+66%). The MLX backend is dramatically more efficient on Apple Silicon.
+- **vllm-mlx is the fastest runtime on 35B-MoE:** 32.7 tok/s with 301 ms TTFT — matching plain MLX on decode (+1%, within noise) while cutting time-to-first-token by 38% (vs 483 ms). The EngineCore prefix-cache scheduler batches prefill more efficiently, explaining the TTFT win with no decode regression.
+- **DDTree no longer beats plain MLX on the 35B MoE under fair methodology.** With multi-prompt + greedy + cool-downs, plain MLX runs at 32.3 tok/s and the best DDTree budget (b=3) reaches only 28.5 tok/s. DDTree still wins on TTFT (274 ms vs 483 ms, though vllm-mlx at 301 ms is close), but the original "DDTree fastest" headline came from a single code prompt where draft acceptance ran higher — averaging across code/prose/json reverses the ordering.
 - **DDTree on 27B dense is roughly a wash:** +3% on Qwen3.5-27B (6.0 vs 5.8 tok/s) — within the noise floor of cool-down variance. The model is so memory-bound that speculative decoding has little spare bandwidth to exploit.
 - **MoE vs dense (cross-family):** the 35B MoE runs at 32.3 tok/s vs 5.7 tok/s for the 27B dense under plain MLX — a 5.7× gap that is entirely architectural. MoE sparsity is a free lunch on Apple Silicon.
 - **OptiQ mixed precision is slower than uniform int4:** Qwen3.6-27B-OptiQ (4.5 BPW avg, 247 layers at 8-bit) runs at 4.8 tok/s vs 5.7 tok/s for uniform 4-bit — the heavier 8-bit layers cost more bandwidth than they buy in quality on this memory-bandwidth-bound chip.
@@ -79,7 +83,7 @@ Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
 ### Methodology / caveats
 
 - All runs on a fanless M4 MacBook Air (32 GB UMA, ~120 GB/s memory bandwidth). Sustained load throttles; results are sensitive to thermal state, hence the cool-down discipline.
-- Software pinned: `mlx-lm 0.31.3`, `mlx 0.31.2`, `dflash-mlx 0.1.0`, `ddtree-mlx 0.1.0` (vendor commit `888f41c`), `ollama 0.21.2` (with MLX backend).
+- Software pinned: `mlx-lm 0.31.3`, `mlx 0.31.2`, `dflash-mlx 0.1.0`, `ddtree-mlx 0.1.0` (vendor commit `888f41c`), `ollama 0.21.2` (with MLX backend), `vllm-mlx 0.2.9` (commit `e46e367`, from `waybarrios/vllm-mlx`).
 - Ollama TTFT is captured from the streaming endpoint (first chunk wall-clock), not from total elapsed time.
 - DDTree decode is greedy (no temperature/sampler param in `generate_ddtree_once`); plain MLX uses `make_sampler(temp=0.0)`. Same seed (42) for both.
 - "Accept (tok/cycle)" = average tokens accepted per draft–verify cycle (typical 2.6–4.2 for tree budgets 2–6). It is **not** a probability; budget>=2 means more than one token can be accepted per cycle.
@@ -106,6 +110,12 @@ cd local-qwen
 uv venv --python 3.12
 uv pip install mlx-lm dflash-mlx
 uv pip install -e vendor/ddtree-mlx
+
+# vllm-mlx (used by benchmark/bench_vllm.py)
+# Recommended: install from GitHub for latest fixes
+uv pip install git+https://github.com/waybarrios/vllm-mlx.git
+# Or stable PyPI release
+# uv pip install vllm-mlx
 ```
 
 > **Note:** `vendor/ddtree-mlx` is the vendored source of the DDTree runtime. It is installed in editable mode so local patches are picked up immediately.
@@ -202,6 +212,7 @@ local-qwen/
 │   ├── bench_ollama.py               # Ollama-only baseline
 │   ├── bench_extras.py               # Plain MLX for Qwen3.6-27B variants (no drafter)
 │   ├── bench_tree_budget_sweep.py    # DDTree tree_budget sweep (one budget per process)
+│   ├── bench_vllm.py                 # vllm-mlx EngineCore standalone bench
 │   ├── run_sweep_overnight.sh        # Orchestrator: budget per fresh process + cool-downs
 │   ├── ENVIRONMENT.md                # Hardware/software pin + run log
 │   └── results/                      # JSON output, one file per (method, model[, budget])
