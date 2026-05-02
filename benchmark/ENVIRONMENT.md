@@ -156,3 +156,22 @@
 - TTFT lower than plain MLX on code (2132 vs 1831 ms — wait, this is higher; the json prompt TTFT 1534 ms is notably lower than plain MLX 2619 ms, likely prefix-cache hit from warmup).
 - Avg decode 5.7 tok/s with prose included, matching plain MLX 5.8 within noise when throttling is factored in.
 
+### Run 20260501T193024Z: vllm-mlx (EngineCore) — Qwen3.6-27B dense
+
+**Bench:** `bench_vllm.py` (VLLM_ONLY=27b, model=Qwen3.6-27B-4bit), same 3-prompt protocol.
+**vllm-mlx version:** 0.2.9 (commit `e46e367`, waybarrios/vllm-mlx); `gpu_memory_utilization=0.7`.
+**Wall-clock duration:** ~18 min.
+**Total runs:** 15 (3 prompts × 2 warmups + 5 timed runs)
+**Status:** all OK; no thermal throttling observed.
+
+| Model | Prompt | Method | TTFT (ms) | Decode (tok/s) |
+|-------|--------|--------|-----------|----------------|
+| Qwen3.6-27B-dense [MLX-int4] | code | vllm-mlx | 1465.0 | 6.64 |
+| Qwen3.6-27B-dense [MLX-int4] | prose | vllm-mlx | 2155.8 | 6.47 |
+| Qwen3.6-27B-dense [MLX-int4] | json | vllm-mlx | 2224.7 | 6.24 |
+
+**Observations:**
+- Decode 6.5 tok/s avg — +14% vs plain MLX 5.7 tok/s on the same model. Unlike the 3.5-27B run (which throttled on prose), all three prompts are stable here.
+- TTFT avg 1949 ms vs plain MLX 2638 ms (−26%). Code prompt notably fast (1465 ms) — likely prefix-cache hit from warmup runs on the shared system-prompt preamble.
+- Clean run with no thermal events; variance < 2% across all 15 decode measurements.
+

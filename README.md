@@ -48,33 +48,26 @@ Sweep against the same DFlash drafter, fresh Python process per budget, same 3-p
 
 **Best budget on this hardware: 3.** Acceptance rises monotonically with the tree size (more candidates verified per cycle), but on M4's ~120 GB/s memory bus the verification cost grows faster than the kernel-launch savings beyond b=3. Even the best DDTree configuration is ~12% slower than plain MLX on this model — see *Key observations* below.
 
-### Qwen 3.6 — 27B dense
+### 27B dense
 
-| Method | Quant | Avg tok/s | TTFT (ms) | vs Ollama | Source |
-|--------|-------|----------:|----------:|----------:|--------|
-| 🥇 Plain MLX | MLX-int4 | **5.7** | 2638 | 1.66× | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
-| Plain MLX | MLX-OptiQ-4bit | 4.8 | 2876 | 1.42× | [mlx-community/Qwen3.6-27B-OptiQ-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-OptiQ-4bit) |
-| Ollama | GGUF-Q4_K_M | 3.4 | 2633 | 1.00× | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) |
+| Method | Model | Quant | Avg tok/s | TTFT (ms) | Accept (tok/cycle) | Source |
+|--------|-------|-------|----------:|----------:|-------------------:|--------|
+| 🥇 vllm-mlx | ✨ Qwen3.6-27B | MLX-int4 | **6.5** | 1949 | — | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
+| DDTree (MLX, b=4)‡ | Qwen3.5-27B | MLX-int4 | 6.0 | 2003 | 4.0 | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
+| Plain MLX | Qwen3.5-27B | MLX-int4 | 5.8 | 2490 | — | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
+| vllm-mlx† | Qwen3.5-27B | MLX-int4 | 5.7 | 2045 | — | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
+| Plain MLX | ✨ Qwen3.6-27B | MLX-int4 | 5.7 | 2638 | — | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
+| Plain MLX | ✨ Qwen3.6-27B | MLX-OptiQ-4bit | 4.8 | 2876 | — | [mlx-community/Qwen3.6-27B-OptiQ-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-OptiQ-4bit) |
+| Ollama | ✨ Qwen3.6-27B | GGUF-Q4_K_M | 3.4 | 2633 | — | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) |
 
-No DFlash drafter exists for Qwen3.6-27B-dense, so DDTree is not yet runnable here.
-
-### Qwen 3.5 — 27B dense
-
-| Method | Quant | Avg tok/s | TTFT (ms) | Accept (tok/cycle) | vs Ollama | Source |
-|--------|-------|----------:|----------:|-------------------:|----------:|--------|
-| 🥇 DDTree (MLX, b=4) | MLX-int4 | **6.0** | 2003 | 4.0 | n/a* | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
-| 🥈 Plain MLX | MLX-int4 | 5.8 | 2490 | — | n/a* | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
-| vllm-mlx† | MLX-int4 | 5.7 | 2045 | — | n/a* | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
-
-\* No Ollama Q4_K_M GGUF run for the 3.5 generation in this sweep — use the 3.6-27B-dense Ollama row above as a same-architecture reference.
-† vllm-mlx prose run throttled on the fanless M4 (4.2 tok/s vs ~6.5 on other prompts), dragging the average down; per-prompt code/json are 6.5 tok/s, comparable to DDTree.
-
-Memory: ~18.2 GB (15 GB model + 3.2 GB DFlash drafter)
+✨ = Qwen3.6 generation &nbsp;|&nbsp; † vllm-mlx 3.5 prose throttled on the fanless M4 (4.2 tok/s vs ~6.5 on code/json), dragging the average down.
+‡ DDTree only runnable on Qwen3.5-27B — no DFlash drafter for 3.6 yet. Memory: ~18.2 GB (15 GB model + 3.2 GB drafter).
+No Ollama Q4_K_M GGUF run for the 3.5 generation — the 3.6 Ollama row is the same-architecture reference.
 
 ### Key observations
 
 - **MLX + Metal beats Ollama (llama.cpp) on the same model:** 32.7 vs 13.3 tok/s on the 35B MoE (+146%) and 5.7 vs 3.4 tok/s on the 27B dense (+66%). The MLX backend is dramatically more efficient on Apple Silicon.
-- **vllm-mlx is the fastest runtime on 35B-MoE:** 32.7 tok/s with 301 ms TTFT — matching plain MLX on decode (+1%, within noise) while cutting time-to-first-token by 38% (vs 483 ms). The EngineCore prefix-cache scheduler batches prefill more efficiently, explaining the TTFT win with no decode regression.
+- **vllm-mlx leads on both model sizes:** 32.7 tok/s on 35B-MoE (301 ms TTFT, −38% vs plain MLX's 483 ms) and 6.5 tok/s on Qwen3.6-27B-dense (1949 ms TTFT, −26% vs plain MLX's 2638 ms). The 35B decode gain is within noise (+1%); the 27B gain is +14%, suggesting the EngineCore scheduler extracts more decode efficiency from the memory-bandwidth-bound dense workload.
 - **DDTree no longer beats plain MLX on the 35B MoE under fair methodology.** With multi-prompt + greedy + cool-downs, plain MLX runs at 32.3 tok/s and the best DDTree budget (b=3) reaches only 28.5 tok/s. DDTree still wins on TTFT (274 ms vs 483 ms, though vllm-mlx at 301 ms is close), but the original "DDTree fastest" headline came from a single code prompt where draft acceptance ran higher — averaging across code/prose/json reverses the ordering.
 - **DDTree on 27B dense is roughly a wash:** +3% on Qwen3.5-27B (6.0 vs 5.8 tok/s) — within the noise floor of cool-down variance. The model is so memory-bound that speculative decoding has little spare bandwidth to exploit.
 - **MoE vs dense (cross-family):** the 35B MoE runs at 32.3 tok/s vs 5.7 tok/s for the 27B dense under plain MLX — a 5.7× gap that is entirely architectural. MoE sparsity is a free lunch on Apple Silicon.
