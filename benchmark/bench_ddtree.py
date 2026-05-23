@@ -9,7 +9,7 @@ Timing convention:
   - DDTree:     TTFT = result["prefill_us"] / 1000.0 (ms); decode from elapsed_us - prefill_us
 
 Environment variables (optional overrides):
-  TARGET: Model ref to use (default: mlx-community/Qwen3.5-27B-4bit)
+  TARGET: Model ref to use (default: mlx-community/Qwen3.6-35B-A3B-4bit-DWQ)
   DRAFT:  Draft model ref (default: auto-resolve via dflash registry)
 
 Usage: HF_HOME=~/Models/HuggingFace .venv/bin/python benchmark/bench_ddtree.py
@@ -19,12 +19,12 @@ import os, time, statistics, gc
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark._lib import (
-    PROMPTS, HOST, cooldown,
+    CODING_PROMPTS, HOST, cooldown,
     PRE_BENCH_COOLDOWN_S, INTER_PROMPT_COOLDOWN_S, INTER_CONFIG_COOLDOWN_S, POST_BENCH_COOLDOWN_S,
     make_greedy_sampler, write_results, get_timestamp_iso8601,
 )
 
-TARGET = os.environ.get("TARGET", "mlx-community/Qwen3.5-27B-4bit")
+TARGET = os.environ.get("TARGET", "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ")
 DRAFT = os.environ.get("DRAFT", None)
 WARMUPS = 2
 RUNS_PER_PROMPT = 5
@@ -33,7 +33,6 @@ TREE_BUDGET = 4
 
 # Derive label from TARGET; map known refs to friendly names.
 _LABEL_MAP = {
-    "mlx-community/Qwen3.5-27B-4bit": "Qwen3.5-27B-dense  [MLX-int4]",
     "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ": "Qwen3.6-35B-MoE    [MLX-int4-DWQ]",
 }
 TARGET_LABEL = _LABEL_MAP.get(TARGET, TARGET)
@@ -128,7 +127,7 @@ for method_name, bench_fn in [
 
     results_this_method = {}
 
-    for prompt_name, prompt_text in PROMPTS:
+    for prompt_name, prompt_text in CODING_PROMPTS:
         print(f"\n  Prompt: {prompt_name}", flush=True)
         print(f"  {'-'*66}", flush=True)
 
@@ -190,12 +189,13 @@ for method, results_dict in results_by_method.items():
         "sampling": {"temperature": 0, "seed": 42, "max_tokens": MAX_TOKENS},
         "warmups": WARMUPS,
         "runs_per_prompt": RUNS_PER_PROMPT,
+        "prompt_set": "coding",
         "results": [
             {
                 "prompt": prompt_name,
                 **results_dict[prompt_name],
             }
-            for prompt_name, _ in PROMPTS
+            for prompt_name, _ in CODING_PROMPTS
         ],
     }
     path = write_results(payload)
@@ -216,11 +216,11 @@ for method in ["plain-mlx", "ddtree-mlx"]:
     if method not in results_by_method:
         continue
     if baseline_decode is None:
-        baseline_decode = results_by_method[method][PROMPTS[0][0]]["decode_tps_median"]
+        baseline_decode = results_by_method[method][CODING_PROMPTS[0][0]]["decode_tps_median"]
 
     print(f"\n  {method}")
     print(f"  {'Prompt':<12}  {'TTFT (ms)':>10}  {'Decode (tok/s)':>15}  {'vs baseline':>12}")
-    for prompt_name, _ in PROMPTS:
+    for prompt_name, _ in CODING_PROMPTS:
         metrics = results_by_method[method][prompt_name]
         ttft_med = metrics["ttft_ms_median"]
         decode_med = metrics["decode_tps_median"]

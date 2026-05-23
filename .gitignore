@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 .env
 .DS_Store
+hf.txt
+.claude/
 *.safetensors
 *.npz
 *.npy
@@ -11,3 +13,5 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+llama.cpp/
+benchmark/logs/

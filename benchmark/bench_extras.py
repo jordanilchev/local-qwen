@@ -14,7 +14,7 @@ import os, time, statistics
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark._lib import (
-    PROMPTS, HOST, cooldown,
+    CODING_PROMPTS, HOST, cooldown,
     PRE_BENCH_COOLDOWN_S, INTER_PROMPT_COOLDOWN_S, INTER_CONFIG_COOLDOWN_S, POST_BENCH_COOLDOWN_S,
     make_greedy_sampler, write_results, get_timestamp_iso8601,
 )
@@ -72,7 +72,7 @@ for target_idx, (label, model_ref) in enumerate(TARGETS):
     print("Loaded.", flush=True)
 
     results = []
-    for p_idx, (prompt_name, prompt_text) in enumerate(PROMPTS):
+    for p_idx, (prompt_name, prompt_text) in enumerate(CODING_PROMPTS):
         if p_idx > 0:
             cooldown(INTER_PROMPT_COOLDOWN_S, f"between prompts of {label}")
 
@@ -111,6 +111,9 @@ for target_idx, (label, model_ref) in enumerate(TARGETS):
         "warmups": WARMUPS,
         "runs_per_prompt": RUNS_PER_PROMPT,
         "results": results,
+        # prompt_set records which prompt list was used so older JSON files
+        # (which used PROMPTS: code/prose/json) remain distinguishable.
+        "prompt_set": "coding",
     }
     path = write_results(payload)
     print(f"\nWrote {label} results to {path}", flush=True)

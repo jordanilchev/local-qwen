@@ -64,6 +64,22 @@ Sweep against the same DFlash drafter, fresh Python process per budget, same 3-p
 ‡ DDTree only runnable on Qwen3.5-27B — no DFlash drafter for 3.6 yet. Memory: ~18.2 GB (15 GB model + 3.2 GB drafter).
 No Ollama Q4_K_M GGUF run for the 3.5 generation — the 3.6 Ollama row is the same-architecture reference.
 
+### Coding Tasks — 27B MTP vs baselines
+
+**Prompts:** 3 coding prompts (algorithm · async client · LRU cache) replacing prose/JSON.  
+**Method:** same protocol (2 warmups + 5 timed runs, greedy, median).  
+**Runtime:** llama.cpp `llama-server` (Metal) via HTTP streaming; model loaded once per config.  
+**Status:** run `python -m benchmark.bench_llamacpp_mtp` to populate — results pending.
+
+| Method | Model | Quant | Avg tok/s | TTFT (ms) | vs baseline | Source |
+|--------|-------|-------|----------:|----------:|------------:|--------|
+| llama.cpp MTP (n=2) | ✨ Qwen3.6-27B-MTP | GGUF-Q4_K_XL | — | — | — | [unsloth/Qwen3.6-27B-MTP-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) |
+| llama.cpp baseline | ✨ Qwen3.6-27B | GGUF-Q4_K_XL | — | — | 1.00× | [unsloth/Qwen3.6-27B-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) |
+
+✨ = Qwen3.6 generation &nbsp;|&nbsp; MTP = Multi-Token Prediction (speculative decoding via bundled prediction heads).  
+Unsloth claims 1.4–2× speedup at `--spec-draft-n-max 2` (83% acceptance rate). At temperature=0 acceptance is higher.  
+Note: these numbers use coding prompts only and are not directly comparable to the mixed-prompt 27B table above.
+
 ### Key observations
 
 - **MLX + Metal beats Ollama (llama.cpp) on the same model:** 32.7 vs 13.3 tok/s on the 35B MoE (+146%) and 5.7 vs 3.4 tok/s on the 27B dense (+66%). The MLX backend is dramatically more efficient on Apple Silicon.
@@ -206,6 +222,7 @@ local-qwen/
 │   ├── bench_extras.py               # Plain MLX for Qwen3.6-27B variants (no drafter)
 │   ├── bench_tree_budget_sweep.py    # DDTree tree_budget sweep (one budget per process)
 │   ├── bench_vllm.py                 # vllm-mlx EngineCore standalone bench
+│   ├── bench_llamacpp_mtp.py         # llama.cpp baseline vs MTP speculative decoding (coding prompts)
 │   ├── run_sweep_overnight.sh        # Orchestrator: budget per fresh process + cool-downs
 │   ├── ENVIRONMENT.md                # Hardware/software pin + run log
 │   └── results/                      # JSON output, one file per (method, model[, budget])
@@ -230,3 +247,5 @@ local-qwen/
 | Drafter (27B dense, 3.5) | `z-lab/Qwen3.5-27B-DFlash` | 3.2 GB | DDTree drafter |
 | Target (27B dense, 3.6) | `mlx-community/Qwen3.6-27B-4bit` | ~15 GB | Newer dense, no drafter yet |
 | Target (27B dense, 3.6 OptiQ) | `mlx-community/Qwen3.6-27B-OptiQ-4bit` | ~16 GB | Mixed-precision variant |
+| GGUF baseline (27B, 3.6) | `unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL` | ~15 GB | llama.cpp 4-bit baseline |
+| GGUF + MTP heads (27B, 3.6) | `unsloth/Qwen3.6-27B-MTP-GGUF:UD-Q4_K_XL` | ~15 GB | Bundled MTP prediction heads for speculative decoding |

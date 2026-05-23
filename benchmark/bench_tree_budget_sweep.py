@@ -13,7 +13,7 @@ import os, time, statistics
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark._lib import (
-    PROMPTS, HOST, cooldown,
+    CODING_PROMPTS, HOST, cooldown,
     PRE_BENCH_COOLDOWN_S, INTER_PROMPT_COOLDOWN_S, INTER_CONFIG_COOLDOWN_S, POST_BENCH_COOLDOWN_S,
     write_results, get_timestamp_iso8601,
 )
@@ -82,7 +82,7 @@ for budget in BUDGETS:
 
     budget_results = {}
 
-    for prompt_name, prompt_text in PROMPTS:
+    for prompt_name, prompt_text in CODING_PROMPTS:
         print(f"\n  Prompt: {prompt_name}", flush=True)
         print(f"  {'-'*66}", flush=True)
 
@@ -129,9 +129,10 @@ for budget in BUDGETS:
         "sampling": {"temperature": 0, "seed": 42, "max_tokens": MAX_TOKENS},
         "warmups": WARMUPS,
         "runs_per_prompt": RUNS_PER_PROMPT,
+        "prompt_set": "coding",
         "results": [
             {"prompt": prompt_name, **budget_results[prompt_name]}
-            for prompt_name, _ in PROMPTS
+            for prompt_name, _ in CODING_PROMPTS
         ],
     }
     path = write_results(payload)
@@ -151,12 +152,12 @@ print(f"  Draft: {DRAFT}")
 print(f"{'='*70}\n")
 
 baseline_budget = 4 if 4 in summary else BUDGETS[0]
-baseline_decode = summary[baseline_budget][PROMPTS[0][0]]["decode_tps_median"]
+baseline_decode = summary[baseline_budget][CODING_PROMPTS[0][0]]["decode_tps_median"]
 
 for budget in BUDGETS:
     print(f"  budget={budget}")
     print(f"  {'Prompt':<12}  {'TTFT (ms)':>10}  {'Decode (tok/s)':>15}  {'vs b=4':>10}  {'tok/cycle':>10}")
-    for prompt_name, _ in PROMPTS:
+    for prompt_name, _ in CODING_PROMPTS:
         metrics = summary[budget][prompt_name]
         ttft_med = metrics["ttft_ms_median"]
         decode_med = metrics["decode_tps_median"]
@@ -165,7 +166,7 @@ for budget in BUDGETS:
         print(f"  {prompt_name:<12}  {ttft_med:>10.1f}  {decode_med:>15.1f}  {ratio:>9.2f}×  {acc_str:>10}")
     print()
 
-best_budget = max(BUDGETS, key=lambda b: max(summary[b][p]["decode_tps_median"] for p, _ in PROMPTS))
-best_decode = max(summary[best_budget][p]["decode_tps_median"] for p, _ in PROMPTS)
+best_budget = max(BUDGETS, key=lambda b: max(summary[b][p]["decode_tps_median"] for p, _ in CODING_PROMPTS))
+best_decode = max(summary[best_budget][p]["decode_tps_median"] for p, _ in CODING_PROMPTS)
 print(f"  Best overall: budget={best_budget} at {best_decode:.1f} tok/s")
 print()

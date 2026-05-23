@@ -18,7 +18,7 @@ import os, time, gc, statistics, uuid
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark._lib import (
-    PROMPTS, HOST, cooldown,
+    CODING_PROMPTS, HOST, cooldown,
     PRE_BENCH_COOLDOWN_S, INTER_PROMPT_COOLDOWN_S, INTER_CONFIG_COOLDOWN_S, POST_BENCH_COOLDOWN_S,
     write_results, get_timestamp_iso8601,
 )
@@ -30,7 +30,6 @@ MAX_TOKENS = 200
 # Same model list as bench_compare.py MLX_MODELS.
 # Filter via VLLM_ONLY="35b" or "27b" to bench a single model (cuts wall time / peak RAM).
 ALL_MLX_MODELS = [
-    ("Qwen3.5-27B-dense  [MLX-int4]",     "mlx-community/Qwen3.5-27B-4bit"),
     ("Qwen3.6-27B-dense  [MLX-int4]",     "mlx-community/Qwen3.6-27B-4bit"),
     ("Qwen3.6-35B-MoE    [MLX-int4-DWQ]", "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"),
 ]
@@ -134,7 +133,7 @@ for label, mlx_ref in MLX_MODELS:
     print(f"Loaded in {time.perf_counter()-t0:.1f}s.", flush=True)
 
     results_this_model = {}
-    for prompt_name, prompt_text in PROMPTS:
+    for prompt_name, prompt_text in CODING_PROMPTS:
         suite_result = run_suite(
             f"vllm-mlx {label} [{prompt_name}]",
             lambda e=engine, t=tokenizer, pr=prompt_text: bench_vllm(e, t, pr),
@@ -175,9 +174,10 @@ for (label, model_ref), results_dict in results_by_model.items():
         "sampling": {"temperature": 0, "seed": 42, "max_tokens": MAX_TOKENS},
         "warmups": WARMUPS,
         "runs_per_prompt": RUNS_PER_PROMPT,
+        "prompt_set": "coding",
         "results": [
             {"prompt": prompt_name, **results_dict[prompt_name]}
-            for prompt_name, _ in PROMPTS
+            for prompt_name, _ in CODING_PROMPTS
         ],
     }
     path = write_results(payload)
@@ -194,7 +194,7 @@ for (label, _), results_dict in sorted(results_by_model.items()):
     print(f"\n  vllm-mlx {label}")
     print(f"  {'-'*60}")
     print(f"  {'Prompt':<12}  {'TTFT (ms)':>10}  {'Decode (tok/s)':>15}")
-    for prompt_name, _ in PROMPTS:
+    for prompt_name, _ in CODING_PROMPTS:
         ttft_med = results_dict[prompt_name]["ttft_ms_median"]
         decode_med = results_dict[prompt_name]["decode_tps_median"]
         print(f"  {prompt_name:<12}  {ttft_med:>10.1f}  {decode_med:>15.1f}")

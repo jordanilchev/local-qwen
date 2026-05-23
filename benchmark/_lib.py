@@ -41,6 +41,25 @@ PROMPTS = [
     ("json", PROMPT_JSON),
 ]
 
+# Coding-focused prompt set used by bench_llamacpp_mtp.py.
+PROMPT_CODE_ASYNC = (
+    "Write a Python async HTTP client class using aiohttp with automatic retry "
+    "(exponential backoff on 5xx and 429 errors, max 3 attempts), a configurable "
+    "per-request timeout, and a context manager interface. Include type hints."
+)
+
+PROMPT_CODE_CACHE = (
+    "Implement a thread-safe LRU cache in Python using collections.OrderedDict. "
+    "Support get(key, default=None), put(key, value), and delete(key) with O(1) "
+    "amortized complexity and a max_size constructor parameter. Include type hints."
+)
+
+CODING_PROMPTS = [
+    ("code-algo",  PROMPT_CODE),
+    ("code-async", PROMPT_CODE_ASYNC),
+    ("code-cache", PROMPT_CODE_CACHE),
+]
+
 # ── Cooldown helper ────────────────────────────────────────────────────────────
 
 def cooldown(seconds: int, reason: str) -> None:
@@ -81,7 +100,7 @@ def write_results(payload: dict) -> Path:
     # modelSlug: model_ref with / → -, remove -4bit, etc. Keep it short.
     method = payload["method"]
     model_ref = payload["model_ref"]
-    model_slug = model_ref.replace("/", "-")  # mlx-community/Qwen3.5-27B-4bit → mlx-community-Qwen3.5-27B-4bit
+    model_slug = model_ref.replace("/", "-")  # mlx-community/Qwen3.6-27B-4bit → mlx-community-Qwen3.6-27B-4bit
 
     ts = payload["ts"]  # e.g. "20260426T220000Z"
     filename = f"{method}_{model_slug}_{ts}.json"

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "git *": "allow",
+      "gh *": "allow",
+      "python *": "allow",
+      "python3 *": "allow",
+      ".venv/bin/python *": "allow",
+      ".venv/bin/pip *": "allow",
+      ".venv/bin/hf *": "allow",
+      ".venv/bin/huggingface-cli *": "allow",
+      "uv *": "allow",
+      "pip3 *": "allow",
+      "brew *": "allow",
+      "ollama *": "allow",
+      "curl *": "allow",
+      "chmod *": "allow",
+      "mkdir *": "allow",
+      "caffeinate *": "allow",
+      "bash *": "allow",
+      "nohup *": "allow",
+      "sw_vers *": "allow",
+      "sysctl *": "allow",
+      "system_profiler *": "allow",
+      "vm_stat": "allow",
+      "top *": "allow",
+      "ps *": "allow",
+      "memory_pressure": "allow",
+      "pmset *": "allow",
+      "pstree *": "allow",
+      "launchctl *": "allow",
+      "pkill *": "ask",
+      "kill *": "ask",
+      "rm *": "ask",
+      "*": "ask"
+    },
+    "websearch": "allow",
+    "webfetch": "allow",
+    "external_directory": {
+      "~/Models/**": "allow",
+      "/tmp/**": "allow",
+      "*": "ask"
+    }
+  }
+}

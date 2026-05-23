@@ -1,0 +1,81 @@
+{
+  "ts": "20260523T054315Z",
+  "host": "M4-MBA-32GB",
+  "method": "llamacpp",
+  "model_label": "Qwen3.6-27B-dense [GGUF-Q4_K_XL]",
+  "model_ref": "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+  "drafter_ref": null,
+  "tree_budget": null,
+  "sampling": {
+    "temperature": 0,
+    "seed": null,
+    "max_tokens": 200
+  },
+  "warmups": 2,
+  "runs_per_prompt": 5,
+  "results": [
+    {
+      "prompt": "code-algo",
+      "ttft_ms_runs": [
+        1269.8147500050254,
+        1316.9575000065379,
+        1546.854957996402,
+        1636.607541993726,
+        1724.0361669973936
+      ],
+      "decode_tps_runs": [
+        5.114113853351535,
+        4.96257950094504,
+        4.879094231584301,
+        4.65584892326183,
+        4.398667176215047
+      ],
+      "accept_ratio_runs": [],
+      "avg_acceptance": null,
+      "ttft_ms_median": 1546.854957996402,
+      "decode_tps_median": 4.879094231584301
+    },
+    {
+      "prompt": "code-async",
+      "ttft_ms_runs": [
+        2500.0361249840353,
+        2971.4925410225987,
+        2735.4731670056935,
+        2733.5857080179267,
+        2753.045250021387
+      ],
+      "decode_tps_runs": [
+        4.236434955895109,
+        4.050642582104602,
+        3.989833999847589,
+        3.901739335131651,
+        3.8913918942531858
+      ],
+      "accept_ratio_runs": [],
+      "avg_acceptance": null,
+      "ttft_ms_median": 2735.4731670056935,
+      "decode_tps_median": 3.989833999847589
+    },
+    {
+      "prompt": "code-cache",
+      "ttft_ms_runs": [
+        2781.0827089997474,
+        2712.4165410059504,
+        2885.47366700368,
+        2832.2209590114653,
+        2893.0358749930747
+      ],
+      "decode_tps_runs": [
+        3.8710573460264714,
+        3.7978507273844673,
+        3.8173759329137096,
+        3.779179144248829,
+        3.681580505942118
+      ],
+      "accept_ratio_runs": [],
+      "avg_acceptance": null,
+      "ttft_ms_median": 2832.2209590114653,
+      "decode_tps_median": 3.7978507273844673
+    }
+  ]
+}
