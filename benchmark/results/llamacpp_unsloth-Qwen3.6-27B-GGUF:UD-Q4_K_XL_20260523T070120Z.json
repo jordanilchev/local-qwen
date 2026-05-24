@@ -1,0 +1,81 @@
+{
+  "ts": "20260523T070120Z",
+  "host": "M4-MBA-32GB",
+  "method": "llamacpp",
+  "model_label": "Qwen3.6-27B-dense [GGUF-Q4_K_XL]",
+  "model_ref": "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+  "drafter_ref": null,
+  "tree_budget": null,
+  "sampling": {
+    "temperature": 0,
+    "seed": null,
+    "max_tokens": 200
+  },
+  "warmups": 2,
+  "runs_per_prompt": 5,
+  "results": [
+    {
+      "prompt": "code-algo",
+      "ttft_ms_runs": [
+        1315.7343750062864,
+        1646.6308329836465,
+        1788.4629170002881,
+        1839.2599999788217,
+        1951.6181249928195
+      ],
+      "decode_tps_runs": [
+        4.994785281020129,
+        4.5033769782966555,
+        4.163653277791763,
+        4.097782490411172,
+        4.0736963779601565
+      ],
+      "accept_ratio_runs": [],
+      "avg_acceptance": null,
+      "ttft_ms_median": 1788.4629170002881,
+      "decode_tps_median": 4.163653277791763
+    },
+    {
+      "prompt": "code-async",
+      "ttft_ms_runs": [
+        2725.876957993023,
+        2654.768333013635,
+        2670.7649170130026,
+        2633.6019590089563,
+        2677.0215000142343
+      ],
+      "decode_tps_runs": [
+        4.07912222821247,
+        4.090548200238255,
+        4.141202591763244,
+        4.048728323988361,
+        4.023618854981969
+      ],
+      "accept_ratio_runs": [],
+      "avg_acceptance": null,
+      "ttft_ms_median": 2670.7649170130026,
+      "decode_tps_median": 4.07912222821247
+    },
+    {
+      "prompt": "code-cache",
+      "ttft_ms_runs": [
+        2697.6699169899803,
+        2667.239291011356,
+        2690.2846659941133,
+        2683.6212080088444,
+        3170.752125006402
+      ],
+      "decode_tps_runs": [
+        3.929561187408851,
+        4.009624458750145,
+        4.1246784483462555,
+        4.1057278353969195,
+        3.9306602431215447
+      ],
+      "accept_ratio_runs": [],
+      "avg_acceptance": null,
+      "ttft_ms_median": 2690.2846659941133,
+      "decode_tps_median": 4.009624458750145
+    }
+  ]
+}
