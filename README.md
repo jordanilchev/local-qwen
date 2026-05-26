@@ -14,29 +14,28 @@ Benchmarks and scripts for running large language models locally on Apple Silico
 
 ## Benchmark Results
 
-**Prompts:** 3 prompts (code · prose · json) at up to 200 generated tokens each.  
-**Sampling:** greedy (temperature=0, seed=42).  
-**Metric:** decode tok/s (generation only, prefill excluded) and TTFT (ms).  
-**Method:** 2 warmups + 5 timed runs per (method, prompt), median reported. Mandatory 60–90 s cool-downs between runs to keep this fanless M4 out of thermal throttle.  
-**Date:** 2026-04-27 · raw JSONs in [`benchmark/results/`](benchmark/results/) · environment + run log in [`benchmark/ENVIRONMENT.md`](benchmark/ENVIRONMENT.md).
+**Prompts:** 3 coding prompts (`code-algo` · `code-async` · `code-cache`) at up to 200 generated tokens each.  
+**Sampling:** greedy (temperature=0, seed=42 where supported), `enable_thinking=False`.  
+**Metric:** decode tok/s (wall clock after first token) and TTFT (ms); per-run token counts in JSON.  
+**Method:** 2 warmups on distinct prompts + 5 timed runs per (method, prompt), **60 s between timed runs**, median reported. Cool-downs per `benchmark/_lib.py`.  
+**Date:** 2026-05-25 · raw JSONs in [`benchmark/results/`](benchmark/results/) · environment + run log in [`benchmark/ENVIRONMENT.md`](benchmark/ENVIRONMENT.md).
 
-Results are split by model family so each table is a direct apples-to-apples comparison of inference methods on the same underlying model. The **Avg tok/s** column is the median-across-prompts mean; per-prompt numbers are in `ENVIRONMENT.md`.
+Results are split by model family so each table is a direct apples-to-apples comparison of inference methods on the same underlying model. The **Avg tok/s** column is the mean of per-prompt medians.
 
 ### Qwen 3.6 — 35B MoE (3B active params/token)
 
-| Method | Quant | Avg tok/s | TTFT (ms) | Accept (tok/cycle) | vs Ollama | Source |
-|--------|-------|----------:|----------:|-------------------:|----------:|--------|
-| 🥇 vllm-mlx | MLX-int4-DWQ | **32.7** | 301 | — | 2.46× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
-| 🥈 Plain MLX | MLX-int4-DWQ | 32.3 | 483 | — | 2.43× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
-| DDTree (MLX, b=3) | MLX-int4-DWQ | 28.5 | 274 | 3.1 | 2.15× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
-| Ollama | GGUF-Q4_K_M | 13.3 | 925 | — | 1.00× | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) |
-| Ollama (uncensored) | GGUF-Q4_K_M | 12.7 | 809 | — | 0.96× | [HauhauCS/Qwen3.6-35B-A3B-Uncensored](https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive) |
+| Method | Quant | Avg tok/s | TTFT (ms) | Accept | vs Ollama | Source |
+|--------|-------|----------:|----------:|-------:|----------:|--------|
+| 🥇 Plain MLX | MLX-int4-DWQ | **32.9** | 723 | — | 1.98× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| 🥈 vllm-mlx | MLX-int4-DWQ | 32.8 | 599 | — | 1.97× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| DDTree (MLX, b=3) | MLX-int4-DWQ | 32.1 | 362 | 3.3 tok/cycle | 1.93× | [mlx-community/Qwen3.6-35B-A3B-4bit-DWQ](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ) |
+| Ollama | GGUF-Q4_K_M | 16.6 | 686 | — | 1.00× | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) |
 
 Memory: ~21.6 GB (20.7 GB model + 0.9 GB DFlash drafter)
 
 #### tree_budget sweep — DDTree on Qwen3.6-35B-MoE [MLX-int4-DWQ]
 
-Sweep against the same DFlash drafter, fresh Python process per budget, same 3-prompt protocol.
+Prior sweep (2026-04-27) used mixed `code/prose/json` prompts; not re-run under the current `coding` protocol.
 
 | Budget | code (t/s) | prose (t/s) | json (t/s) | Avg t/s | Avg accept (tok/cycle) |
 |-------:|-----------:|------------:|-----------:|--------:|-----------------------:|
@@ -46,55 +45,38 @@ Sweep against the same DFlash drafter, fresh Python process per budget, same 3-p
 | 5 | 29.7 | 23.0 | 24.9 | 25.9 | 3.8 |
 | 6 | 28.9 | 22.9 | 25.4 | 25.7 | 4.2 |
 
-**Best budget on this hardware: 3.** Acceptance rises monotonically with the tree size (more candidates verified per cycle), but on M4's ~120 GB/s memory bus the verification cost grows faster than the kernel-launch savings beyond b=3. Even the best DDTree configuration is ~12% slower than plain MLX on this model — see *Key observations* below.
+**Default budget: 3.** Under the current coding-prompt run, DDTree at b=3 reaches 32.1 tok/s — within ~2% of plain MLX (32.9).
 
-### 27B dense
+### Qwen 3.6 — 27B dense
 
-| Method | Model | Quant | Avg tok/s | TTFT (ms) | Accept (tok/cycle) | Source |
-|--------|-------|-------|----------:|----------:|-------------------:|--------|
-| 🥇 vllm-mlx | ✨ Qwen3.6-27B | MLX-int4 | **6.5** | 1949 | — | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
-| DDTree (MLX, b=4)‡ | Qwen3.5-27B | MLX-int4 | 6.0 | 2003 | 4.0 | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
-| Plain MLX | Qwen3.5-27B | MLX-int4 | 5.8 | 2490 | — | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
-| vllm-mlx† | Qwen3.5-27B | MLX-int4 | 5.7 | 2045 | — | [mlx-community/Qwen3.5-27B-4bit](https://huggingface.co/mlx-community/Qwen3.5-27B-4bit) |
-| Plain MLX | ✨ Qwen3.6-27B | MLX-int4 | 5.7 | 2638 | — | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
-| Plain MLX | ✨ Qwen3.6-27B | MLX-OptiQ-4bit | 4.8 | 2876 | — | [mlx-community/Qwen3.6-27B-OptiQ-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-OptiQ-4bit) |
-| Ollama | ✨ Qwen3.6-27B | GGUF-Q4_K_M | 3.4 | 2633 | — | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) |
+| Method | Quant | Avg tok/s | TTFT (ms) | Accept | vs Ollama | Source |
+|--------|-------|----------:|----------:|-------:|----------:|--------|
+| 🥇 llama.cpp MTP (n=2) | GGUF-Q4_K_XL | **6.0** | 1897 | 90% draft | 1.36× | [unsloth/Qwen3.6-27B-MTP-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) |
+| Plain MLX | MLX-int4 | 5.5 | 2131 | — | 1.25× | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
+| vllm-mlx | MLX-int4 | 5.4 | 1929 | — | 1.23× | [mlx-community/Qwen3.6-27B-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-4bit) |
+| llama.cpp baseline | GGUF-Q4_K_XL | 5.1 | 1811 | — | 1.16× | [unsloth/Qwen3.6-27B-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) |
+| Ollama | GGUF-Q4_K_M | 4.4 | 1503 | — | 1.00× | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) |
+| Plain MLX (OptiQ) | MLX-OptiQ-4bit | 2.6 | 3227 | — | 0.59× | [mlx-community/Qwen3.6-27B-OptiQ-4bit](https://huggingface.co/mlx-community/Qwen3.6-27B-OptiQ-4bit) |
 
-✨ = Qwen3.6 generation &nbsp;|&nbsp; † vllm-mlx 3.5 prose throttled on the fanless M4 (4.2 tok/s vs ~6.5 on code/json), dragging the average down.
-‡ DDTree only runnable on Qwen3.5-27B — no DFlash drafter for 3.6 yet. Memory: ~18.2 GB (15 GB model + 3.2 GB drafter).
-No Ollama Q4_K_M GGUF run for the 3.5 generation — the 3.6 Ollama row is the same-architecture reference.
-
-### Coding Tasks — 27B MTP vs baselines
-
-**Prompts:** 3 coding prompts (algorithm · async client · LRU cache) replacing prose/JSON.  
-**Method:** same protocol (2 warmups + 5 timed runs, greedy, median).  
-**Runtime:** llama.cpp `llama-server` (Metal) via HTTP streaming; model loaded once per config.  
-**Status:** run `python -m benchmark.bench_llamacpp_mtp` to populate — results pending.
-
-| Method | Model | Quant | Avg tok/s | TTFT (ms) | vs baseline | Source |
-|--------|-------|-------|----------:|----------:|------------:|--------|
-| llama.cpp MTP (n=2) | ✨ Qwen3.6-27B-MTP | GGUF-Q4_K_XL | — | — | — | [unsloth/Qwen3.6-27B-MTP-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF) |
-| llama.cpp baseline | ✨ Qwen3.6-27B | GGUF-Q4_K_XL | — | — | 1.00× | [unsloth/Qwen3.6-27B-GGUF](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) |
-
-✨ = Qwen3.6 generation &nbsp;|&nbsp; MTP = Multi-Token Prediction (speculative decoding via bundled prediction heads).  
-Unsloth claims 1.4–2× speedup at `--spec-draft-n-max 2` (83% acceptance rate). At temperature=0 acceptance is higher.  
-Note: these numbers use coding prompts only and are not directly comparable to the mixed-prompt 27B table above.
+† Plain MLX and vllm-mlx show thermal throttling on `code-cache` (3.2–3.3 tok/s vs ~6.6 on other prompts) on this fanless M4.
 
 ### Key observations
 
-- **MLX + Metal beats Ollama (llama.cpp) on the same model:** 32.7 vs 13.3 tok/s on the 35B MoE (+146%) and 5.7 vs 3.4 tok/s on the 27B dense (+66%). The MLX backend is dramatically more efficient on Apple Silicon.
-- **vllm-mlx leads on both model sizes:** 32.7 tok/s on 35B-MoE (301 ms TTFT, −38% vs plain MLX's 483 ms) and 6.5 tok/s on Qwen3.6-27B-dense (1949 ms TTFT, −26% vs plain MLX's 2638 ms). The 35B decode gain is within noise (+1%); the 27B gain is +14%, suggesting the EngineCore scheduler extracts more decode efficiency from the memory-bandwidth-bound dense workload.
-- **DDTree no longer beats plain MLX on the 35B MoE under fair methodology.** With multi-prompt + greedy + cool-downs, plain MLX runs at 32.3 tok/s and the best DDTree budget (b=3) reaches only 28.5 tok/s. DDTree still wins on TTFT (274 ms vs 483 ms, though vllm-mlx at 301 ms is close), but the original "DDTree fastest" headline came from a single code prompt where draft acceptance ran higher — averaging across code/prose/json reverses the ordering.
-- **DDTree on 27B dense is roughly a wash:** +3% on Qwen3.5-27B (6.0 vs 5.8 tok/s) — within the noise floor of cool-down variance. The model is so memory-bound that speculative decoding has little spare bandwidth to exploit.
-- **MoE vs dense (cross-family):** the 35B MoE runs at 32.3 tok/s vs 5.7 tok/s for the 27B dense under plain MLX — a 5.7× gap that is entirely architectural. MoE sparsity is a free lunch on Apple Silicon.
-- **OptiQ mixed precision is slower than uniform int4:** Qwen3.6-27B-OptiQ (4.5 BPW avg, 247 layers at 8-bit) runs at 4.8 tok/s vs 5.7 tok/s for uniform 4-bit — the heavier 8-bit layers cost more bandwidth than they buy in quality on this memory-bandwidth-bound chip.
+- **MLX + Metal beats Ollama on the same model:** 32.9 vs 16.6 tok/s on 35B MoE (+98%) and 5.5 vs 4.4 tok/s on 27B dense (+25%).
+- **DDTree on 35B MoE is now competitive with plain MLX** under the unified methodology (32.1 vs 32.9 tok/s at b=3), while cutting TTFT roughly in half (362 ms vs 723 ms).
+- **vllm-mlx matches plain MLX decode on 35B** (32.8 vs 32.9 tok/s) with lower TTFT (599 ms). On 27B, decode is in the same band but thermally noisy.
+- **llama.cpp MTP gives +18% over its own baseline** (6.0 vs 5.1 tok/s) at `--spec-draft-n-max 2` with ~90% draft acceptance — modest but real on this memory-bound chip.
+- **OptiQ mixed precision is slower than uniform int4:** 2.6 vs 5.5 tok/s on 27B — bandwidth cost of 8-bit layers dominates on M4.
+- **MoE vs dense:** 35B MoE plain MLX at 32.9 tok/s vs 27B at 5.5 tok/s — a 6× architectural gap on identical silicon.
 
 ### Methodology / caveats
 
 - All runs on a fanless M4 MacBook Air (32 GB UMA, ~120 GB/s memory bandwidth). Sustained load throttles; results are sensitive to thermal state, hence the cool-down discipline.
-- Software pinned: `mlx-lm 0.31.3`, `mlx 0.31.2`, `dflash-mlx 0.1.0`, `ddtree-mlx 0.1.0` (vendor commit `888f41c`), `ollama 0.21.2` (with MLX backend), `vllm-mlx 0.2.9` (commit `e46e367`, from `waybarrios/vllm-mlx`).
-- Ollama TTFT is captured from the streaming endpoint (first chunk wall-clock), not from total elapsed time.
-- DDTree decode is greedy (no temperature/sampler param in `generate_ddtree_once`); plain MLX uses `make_sampler(temp=0.0)`. Same seed (42) for both.
+- Software pinned: `mlx-lm 0.31.3`, `mlx 0.31.2`, `dflash-mlx 0.1.0`, `ddtree-mlx 0.1.0` (vendor commit `888f41c`), `vllm-mlx 0.2.9` (commit `e46e367`), Ollama 0.24.0, llama.cpp ≥ b9180 for MTP.
+- Ollama uses `/api/chat` with `think: false`; same user messages as MLX (`enable_thinking=False`).
+- DDTree default `tree_budget=3`; TTFT from `prefill_us`, decode from wall clock after TTFT.
+- DDTree decode is greedy (no temperature/sampler param in `generate_ddtree_once`); plain MLX uses `make_sampler(temp=0.0)`.
+- Published tables before 2026-05-24 used mixed `code/prose/json` prompts — not comparable to current `coding` prompt set.
 - "Accept (tok/cycle)" = average tokens accepted per draft–verify cycle (typical 2.6–4.2 for tree budgets 2–6). It is **not** a probability; budget>=2 means more than one token can be accepted per cycle.
 - Per-process model load on each sweep budget so that 22 GB of model+drafter does not stay resident through the full sweep — earlier single-process runs OOM'd after ~100 minutes of sustained load.
 
@@ -172,7 +154,7 @@ HF_HOME=~/Models/HuggingFace .venv/bin/python -m pytest tests/ -v
 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_ddtree.py "Explain transformers in one paragraph."
 
 # Override defaults
-MAX_TOKENS=512 TREE_BUDGET=4 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_ddtree.py "Your prompt"
+MAX_TOKENS=512 TREE_BUDGET=3 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_ddtree.py "Your prompt"
 ```
 
 ### 5. Start the OpenAI-compatible server
@@ -193,17 +175,24 @@ curl http://localhost:8006/v1/chat/completions \
 
 ### 6. Run the benchmark
 
-**Full 6-method comparison (Ollama + MLX + DDTree):**
+**Full suite (recommended):**
 
 ```bash
-# Requires Ollama running with: ollama pull qwen3.6:27b && ollama pull qwen3.6-uncensored:35b-q4
-HF_HOME=~/Models/HuggingFace .venv/bin/python benchmark/bench_compare.py
+./benchmark/run_all_benches.sh
+```
+
+Order: llama.cpp MTP → plain MLX extras → DDTree → vllm-mlx → Ollama + MLX compare.
+
+**Ollama-only compare** (requires `ollama pull qwen3.6:27b && ollama pull qwen3.6:35b`):
+
+```bash
+BENCH_PHASE=ollama HF_HOME=~/Models/HuggingFace .venv/bin/python -m benchmark.bench_compare
 ```
 
 **MLX-only comparison (no Ollama needed):**
 
 ```bash
-HF_HOME=~/Models/HuggingFace .venv/bin/python benchmark/bench_ddtree.py
+HF_HOME=~/Models/HuggingFace .venv/bin/python -m benchmark.bench_ddtree
 ```
 
 > **Memory warning:** The benchmark loads MLX models only after Ollama models are explicitly unloaded. Do not add new Ollama models to `OLLAMA_MODELS` if their GGUF size + 21.6 GB exceeds 32 GB.
@@ -223,7 +212,10 @@ local-qwen/
 │   ├── bench_tree_budget_sweep.py    # DDTree tree_budget sweep (one budget per process)
 │   ├── bench_vllm.py                 # vllm-mlx EngineCore standalone bench
 │   ├── bench_llamacpp_mtp.py         # llama.cpp baseline vs MTP speculative decoding (coding prompts)
-│   ├── run_sweep_overnight.sh        # Orchestrator: budget per fresh process + cool-downs
+│   ├── run_all_benches.sh            # Full suite orchestrator
+│   ├── rerun_compare_ollama.sh       # Ollama phase only (27b + 35b)
+│   ├── rerun_ddtree_after_main.sh    # DDTree re-run helper
+│   ├── rerun_llamacpp_mtp_after_ollama.sh
 │   ├── ENVIRONMENT.md                # Hardware/software pin + run log
 │   └── results/                      # JSON output, one file per (method, model[, budget])
 ├── scripts/

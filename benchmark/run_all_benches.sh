@@ -23,7 +23,7 @@ STATUS_FILE="$LOG_DIR/run_all_benches_status.json"
 INTER_BENCH_COOL_S=120
 
 BENCHES=(
-  # llamacpp_mtp deferred: streaming parser + MTP startup bugs (run last after fix)
+  "llamacpp_mtp:benchmark.bench_llamacpp_mtp"
   "extras:benchmark.bench_extras"
   "ddtree:benchmark.bench_ddtree"
   "vllm:benchmark.bench_vllm"

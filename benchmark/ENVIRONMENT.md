@@ -21,11 +21,14 @@
 ## Methodology constraints
 
 - One benchmark at a time; no other CPU loads
-- >=60 s cool-down before each bench item, 60-90 s between runs of the same model, 90 s between distinct models
-- Decode-only output tok/s + TTFT both reported
-- Sampling pinned to temperature=0
+- 60 s pre-bench cooldown; **60 s between timed runs**; 60 s between prompts; 90 s between configs/models
+- All backends use chat-formatted input with `enable_thinking=False` (Ollama `/api/chat`, MLX `apply_chat_template`, llama.cpp `chat_template_kwargs`)
+- Warmup prompts differ from timed prompts to avoid prefix-cache TTFT skew
+- Decode tok/s + TTFT both reported; per-run `completion_tokens` recorded in JSON
+- Sampling: temperature=0, seed=42 where the backend supports it
 - 2 warmups + 5 timed runs, median reported
-- Same prompt set across all methods (defined in the bench refactor step)
+- Prompt set: `coding` (`code-algo`, `code-async`, `code-cache`) — see `benchmark/_lib.py`
+- DDTree default `tree_budget=3` (best on M4 per sweep)
 - Software versions pinned in this file
 
 ## Run log
@@ -175,3 +178,24 @@
 - TTFT avg 1949 ms vs plain MLX 2638 ms (−26%). Code prompt notably fast (1465 ms) — likely prefix-cache hit from warmup runs on the shared system-prompt preamble.
 - Clean run with no thermal events; variance < 2% across all 15 decode measurements.
 
+### Run 20260524T200149Z – full suite refresh (coding prompts)
+
+**Orchestrator:** `run_all_benches.sh` → extras, ddtree, vllm, compare, llamacpp MTP (split across follow-up scripts after failures).
+
+**Methodology:** unified `benchmark/_lib.py` — `coding` prompt set, 60 s between timed runs, separate warmup prompts, Ollama `/api/chat` with `think: false`, DDTree `tree_budget=3`.
+
+**Status:** main compare failed (Ollama empty); DDTree failed pre-fix (draft_model=None). Follow-ups completed 2026-05-25.
+
+| Follow-up | Timestamp | Output |
+|-----------|-----------|--------|
+| plain-mlx 27B + OptiQ | 20260524T213749Z / 20260525T040747Z | 2 JSONs |
+| vllm-mlx 27B + 35B | 20260525T073353Z | 2 JSONs |
+| DDTree + plain 35B | 20260525T074140Z | 2 JSONs |
+| llama.cpp baseline + MTP | 20260525T215412Z | 2 JSONs (~53 min) |
+| Ollama 27B + 35B | 20260525T215713Z | 2 JSONs (~52 min) |
+
+**35B MoE avg decode / TTFT:** plain-mlx 32.9 / 723 ms · vllm-mlx 32.8 / 599 ms · ddtree-mlx b=3 32.1 / 362 ms (accept ~3.3 tok/cycle) · Ollama 16.6 / 686 ms.
+
+**27B dense avg decode / TTFT:** llama.cpp MTP 6.0 / 1897 ms (~90% draft accept) · plain-mlx 5.5 / 2131 ms · vllm-mlx 5.4 / 1929 ms · llama.cpp baseline 5.1 / 1811 ms · Ollama 4.4 / 1503 ms · plain-mlx OptiQ 2.6 / 3227 ms.
+
+**Notes:** Removed broken `qwen3.6-uncensored:35b-q4` Ollama tag. Prior April JSONs and budget-sweep files deleted; budget sweep not re-run under coding protocol.

@@ -1,108 +1,513 @@
 #!/usr/bin/env python3
 """
-Shared utilities for benchmark scripts: prompts, cooldown, JSON output, greedy sampler.
+Shared utilities for benchmark scripts: prompts, cooldown, JSON output, timing helpers.
 Fanless M4 MacBook Air requires strict thermal discipline.
+
+Timing convention (all HTTP / Python-stream backends):
+  TTFT   = wall time from request/call start to first generated token (or first stream chunk)
+  Decode = (completion_tokens - 1) / wall time after first token
+
+DDTree uses internal prefill_us for TTFT (no streaming hook); total_ms is wall clock for the call.
 """
-import time
+from __future__ import annotations
+
 import json
-from pathlib import Path
+import os
+import statistics
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Any, Callable
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 HOST = "M4-MBA-32GB"
 
 PRE_BENCH_COOLDOWN_S = 60
-INTER_PROMPT_COOLDOWN_S = 30
-INTER_CONFIG_COOLDOWN_S = 60
+INTER_RUN_COOLDOWN_S = 60
+INTER_PROMPT_COOLDOWN_S = 60
+INTER_CONFIG_COOLDOWN_S = 90
 POST_BENCH_COOLDOWN_S = 60
 
-# Multi-prompt set: code, prose, JSON.
+WARMUPS = 2
+RUNS_PER_PROMPT = 5
+MAX_TOKENS = 200
+DEFAULT_TREE_BUDGET = 3  # best on M4 per bench_tree_budget_sweep (was 4)
+
+# Disable thinking mode so Qwen3.x models match across MLX / Ollama / llama.cpp paths.
+CHAT_TEMPLATE_KWARGS: dict[str, Any] = {"enable_thinking": False}
+
+DEFAULT_SAMPLING: dict[str, Any] = {
+    "temperature": 0,
+    "seed": 42,
+    "max_tokens": MAX_TOKENS,
+    "enable_thinking": False,
+}
+
+PROMPT_SET = "coding"
+
+# Legacy mixed prompt set (kept for comparing against older JSON results).
 PROMPT_CODE = (
     "Implement a red-black tree in Python with insert, delete, and search methods. "
     "Include proper rebalancing logic and type hints."
 )
-
 PROMPT_PROSE = (
     "Write a short essay (about 200 words) explaining why memory bandwidth, not raw compute, "
     "is the bottleneck for transformer inference on Apple Silicon. Use vivid analogies and "
     "avoid technical jargon."
 )
-
 PROMPT_JSON = (
     "Return a JSON array of 5 fictional novels. Each entry must have keys: title, author, year, "
     "genre, summary (2 sentences). Output a single valid JSON array. No commentary, no markdown fences."
 )
-
 PROMPTS = [
     ("code", PROMPT_CODE),
     ("prose", PROMPT_PROSE),
     ("json", PROMPT_JSON),
 ]
 
-# Coding-focused prompt set used by bench_llamacpp_mtp.py.
 PROMPT_CODE_ASYNC = (
     "Write a Python async HTTP client class using aiohttp with automatic retry "
     "(exponential backoff on 5xx and 429 errors, max 3 attempts), a configurable "
     "per-request timeout, and a context manager interface. Include type hints."
 )
-
 PROMPT_CODE_CACHE = (
     "Implement a thread-safe LRU cache in Python using collections.OrderedDict. "
     "Support get(key, default=None), put(key, value), and delete(key) with O(1) "
     "amortized complexity and a max_size constructor parameter. Include type hints."
 )
-
 CODING_PROMPTS = [
-    ("code-algo",  PROMPT_CODE),
+    ("code-algo", PROMPT_CODE),
     ("code-async", PROMPT_CODE_ASYNC),
     ("code-cache", PROMPT_CODE_CACHE),
 ]
 
-# ── Cooldown helper ────────────────────────────────────────────────────────────
+# Qwen3.6 drafters are not in dflash_mlx 0.1.0's DRAFT_REGISTRY yet.
+DEFAULT_DRAFT_BY_TARGET: dict[str, str] = {
+    "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ": "z-lab/Qwen3.6-35B-A3B-DFlash",
+}
+
+# Warmup prompts differ from timed prompts so prefix-cache priming does not skew TTFT.
+WARMUP_PROMPTS = [
+    "List three primary colors.",
+    "What is 17 + 25? Reply with the number only.",
+    "Name one planet in our solar system.",
+]
+
+
+@dataclass(frozen=True)
+class RunMetrics:
+    ttft_ms: float
+    decode_tps: float
+    completion_tokens: int
+    total_ms: float
+
+
+# ── Chat formatting ────────────────────────────────────────────────────────────
+
+def chat_messages(user_text: str) -> list[dict[str, str]]:
+    return [{"role": "user", "content": user_text}]
+
+
+def apply_chat_prompt(tokenizer, user_text: str) -> str:
+    return tokenizer.apply_chat_template(
+        chat_messages(user_text),
+        tokenize=False,
+        add_generation_prompt=True,
+        **CHAT_TEMPLATE_KWARGS,
+    )
+
+
+def apply_chat_prompt_tokens(tokenizer, user_text: str) -> list[int]:
+    return list(
+        tokenizer.apply_chat_template(
+            chat_messages(user_text),
+            tokenize=True,
+            add_generation_prompt=True,
+            **CHAT_TEMPLATE_KWARGS,
+        )
+    )
+
+
+def resolve_draft_ref(model_ref: str, draft_ref: Optional[str] = None) -> Optional[str]:
+    """Resolve drafter HF ref: explicit override → dflash registry → local fallback map."""
+    if draft_ref:
+        return draft_ref
+    try:
+        from dflash_mlx.generate import resolve_optional_draft_ref
+
+        resolved = resolve_optional_draft_ref(model_ref, None)
+        if resolved:
+            return resolved
+    except ImportError:
+        pass
+    return DEFAULT_DRAFT_BY_TARGET.get(model_ref)
+
+
+def load_ddtree_runtime(model_ref: str, draft_ref: Optional[str] = None):
+    """Load target + drafter for DDTree; fail fast if the drafter cannot be loaded."""
+    from dflash_mlx.generate import get_stop_token_ids, load_runtime_components
+
+    resolved = resolve_draft_ref(model_ref, draft_ref)
+    target, tokenizer, draft, loaded_ref = load_runtime_components(
+        model_ref=model_ref,
+        draft_ref=resolved,
+    )
+    if draft is None:
+        raise RuntimeError(
+            f"DDTree requires a drafter but draft_model is None for target {model_ref!r} "
+            f"(resolved draft ref: {resolved!r}). Set DRAFT= explicitly or add "
+            f"benchmark._lib.DEFAULT_DRAFT_BY_TARGET[{model_ref!r}]."
+        )
+    return target, tokenizer, draft, loaded_ref, get_stop_token_ids(tokenizer)
+
+
+# ── Timing helpers ─────────────────────────────────────────────────────────────
+
+def decode_tps_from_wallclock(completion_tokens: int, ttft_ms: float, total_ms: float) -> float:
+    """Decode tok/s excluding TTFT; returns 0 when fewer than 2 tokens."""
+    if completion_tokens <= 1:
+        return 0.0
+    decode_s = max((total_ms - ttft_ms) / 1000.0, 0.0)
+    return (completion_tokens - 1) / decode_s if decode_s > 0 else 0.0
+
+
+def median_run_field(runs: list[RunMetrics], field: str) -> float:
+    return statistics.median(getattr(r, field) for r in runs)
+
+
+def runs_to_result_dict(runs: list[RunMetrics], extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ttft_ms_runs": [r.ttft_ms for r in runs],
+        "decode_tps_runs": [r.decode_tps for r in runs],
+        "completion_tokens_runs": [r.completion_tokens for r in runs],
+        "total_ms_runs": [r.total_ms for r in runs],
+        "ttft_ms_median": median_run_field(runs, "ttft_ms"),
+        "decode_tps_median": median_run_field(runs, "decode_tps"),
+        "completion_tokens_median": int(median_run_field(runs, "completion_tokens")),
+        "total_ms_median": median_run_field(runs, "total_ms"),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+# ── Cooldown + suite runner ────────────────────────────────────────────────────
 
 def cooldown(seconds: int, reason: str) -> None:
-    """Sleep with reason logged to stdout, for thermal management on fanless M4 Air."""
     print(f"[cooldown {seconds}s] {reason}", flush=True)
     time.sleep(seconds)
 
-# ── Greedy sampler factory ─────────────────────────────────────────────────────
+
+def run_prompt_suite(
+    label: str,
+    bench_fn: Callable[[], RunMetrics],
+    warmup_fn: Callable[[str], None],
+    warmup_prompts: list[str] | None = None,
+    warmups: int = WARMUPS,
+    runs: int = RUNS_PER_PROMPT,
+) -> dict[str, Any]:
+    """Warm up on distinct prompts, then timed runs with inter-run cooldown."""
+    warmups_list = warmup_prompts or WARMUP_PROMPTS
+
+    print(f"\n{'='*70}", flush=True)
+    print(f"  {label}", flush=True)
+    print(f"{'='*70}", flush=True)
+
+    for w in range(1, warmups + 1):
+        wp = warmups_list[(w - 1) % len(warmups_list)]
+        print(f"  [warmup {w}/{warmups}]...", end=" ", flush=True)
+        warmup_fn(wp)
+        print("done", flush=True)
+
+    timed_runs: list[RunMetrics] = []
+    for i in range(1, runs + 1):
+        if i > 1:
+            cooldown(INTER_RUN_COOLDOWN_S, f"between timed runs ({label})")
+        print(f"  [run {i}/{runs}] ", end="", flush=True)
+        metrics = bench_fn()
+        timed_runs.append(metrics)
+        print(
+            f"TTFT {metrics.ttft_ms:.1f}ms  decode {metrics.decode_tps:.1f} tok/s"
+            f"  ({metrics.completion_tokens} tok)",
+            flush=True,
+        )
+
+    return runs_to_result_dict(timed_runs)
+
+
+# ── MLX plain stream_generate ──────────────────────────────────────────────────
 
 def make_greedy_sampler() -> Callable:
-    """Return a greedy (temperature=0) sampler for mlx_lm.stream_generate / generate_step.
-
-    Canonical pattern:
-        from benchmark._lib import make_greedy_sampler
-        sampler = make_greedy_sampler()
-        for token in stream_generate(model, tokenizer, sampler=sampler, ...):
-            ...
-    """
     from mlx_lm.sample_utils import make_sampler
     return make_sampler(temp=0.0)
 
+
+def bench_ddtree(
+    target_model,
+    tokenizer,
+    draft_model,
+    stop_ids,
+    prompt_text: str,
+    tree_budget: int = DEFAULT_TREE_BUDGET,
+    max_tokens: int = MAX_TOKENS,
+) -> tuple[RunMetrics, float]:
+    """Returns (metrics, avg_acceptance). TTFT from prefill_us; decode uses wall clock after TTFT."""
+    from ddtree_mlx.runtime import generate_ddtree_once
+
+    prompt_tokens = apply_chat_prompt_tokens(tokenizer, prompt_text)
+    t0 = time.perf_counter()
+    result = generate_ddtree_once(
+        target_model=target_model,
+        draft_model=draft_model,
+        tokenizer=tokenizer,
+        prompt_tokens=prompt_tokens,
+        max_new_tokens=max_tokens,
+        tree_budget=tree_budget,
+        stop_token_ids=stop_ids,
+    )
+    t_end = time.perf_counter()
+
+    gen_tokens = int(result["generation_tokens"])
+    ttft_ms = result["prefill_us"] / 1000.0
+    total_ms = (t_end - t0) * 1000.0
+    decode_tps = decode_tps_from_wallclock(gen_tokens, ttft_ms, total_ms)
+    avg_acceptance = float(result.get("avg_acceptance", float("nan")))
+    return RunMetrics(ttft_ms, decode_tps, gen_tokens, total_ms), avg_acceptance
+
+
+def bench_vllm_engine(
+    engine, tokenizer, prompt_text: str, max_tokens: int = MAX_TOKENS
+) -> RunMetrics:
+    import uuid
+    from vllm_mlx import Request, SamplingParams
+    from vllm_mlx.mlx_streams import bind_generation_streams
+
+    sp = SamplingParams(temperature=0.0, max_tokens=max_tokens, top_p=1.0, top_k=0)
+    prompt_str = apply_chat_prompt(tokenizer, prompt_text)
+    rid = str(uuid.uuid4())
+    request = Request(request_id=rid, prompt=prompt_str, sampling_params=sp)
+
+    bind_generation_streams()
+    engine.scheduler.add_request(request)
+
+    t0 = time.perf_counter()
+    t_first: float | None = None
+    count = 0
+    try:
+        while engine.scheduler.has_requests():
+            out = engine.scheduler.step()
+            for ro in out.outputs:
+                if ro.request_id != rid:
+                    continue
+                n = len(ro.new_token_ids)
+                if n > 0 and t_first is None:
+                    t_first = time.perf_counter()
+                count += n
+    finally:
+        engine.scheduler.remove_finished_request(rid)
+
+    t_end = time.perf_counter()
+    if t_first is None:
+        return RunMetrics(0.0, 0.0, count, (t_end - t0) * 1000.0)
+
+    ttft_ms = (t_first - t0) * 1000.0
+    total_ms = (t_end - t0) * 1000.0
+    decode_tps = decode_tps_from_wallclock(count, ttft_ms, total_ms)
+    return RunMetrics(ttft_ms, decode_tps, count, total_ms)
+
+
+def bench_mlx_plain(model, tokenizer, prompt_text: str, max_tokens: int = MAX_TOKENS) -> RunMetrics:
+    from mlx_lm import stream_generate
+
+    prompt_str = apply_chat_prompt(tokenizer, prompt_text)
+    sampler = make_greedy_sampler()
+
+    t0 = time.perf_counter()
+    t_first: float | None = None
+    count = 0
+    for _ in stream_generate(
+        model, tokenizer, prompt=prompt_str, max_tokens=max_tokens, sampler=sampler
+    ):
+        if t_first is None:
+            t_first = time.perf_counter()
+        count += 1
+
+    t_end = time.perf_counter()
+    if t_first is None:
+        return RunMetrics(0.0, 0.0, 0, (t_end - t0) * 1000.0)
+
+    ttft_ms = (t_first - t0) * 1000.0
+    total_ms = (t_end - t0) * 1000.0
+    decode_tps = decode_tps_from_wallclock(count, ttft_ms, total_ms)
+    return RunMetrics(ttft_ms, decode_tps, count, total_ms)
+
+
+# ── Ollama chat streaming ──────────────────────────────────────────────────────
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+
+def wait_for_ollama_server(timeout_s: int = 60) -> None:
+    url = f"{OLLAMA_HOST}/api/tags"
+    deadline = time.time() + timeout_s
+    last_err: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2):
+                return
+        except Exception as exc:
+            last_err = exc
+            time.sleep(1)
+    raise RuntimeError(f"Ollama not reachable at {OLLAMA_HOST} after {timeout_s}s: {last_err}")
+
+
+def list_ollama_models() -> set[str]:
+    wait_for_ollama_server()
+    with urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=10) as resp:
+        data = json.loads(resp.read())
+    names: set[str] = set()
+    for entry in data.get("models", []):
+        name = entry.get("name", "")
+        if name:
+            names.add(name)
+            if ":" in name:
+                names.add(name.split(":", 1)[0])
+    return names
+
+
+def _ollama_model_present(model: str, available: set[str]) -> bool:
+    if model in available:
+        return True
+    base = model.split(":", 1)[0]
+    tag = model.split(":", 1)[1] if ":" in model else "latest"
+    return model in available or f"{base}:{tag}" in available or (
+        tag == "latest" and base in available
+    )
+
+
+def ensure_ollama_model(model: str) -> None:
+    """Pull the model if it is not already present locally."""
+    import subprocess
+
+    wait_for_ollama_server()
+    available = list_ollama_models()
+    if _ollama_model_present(model, available):
+        print(f"Ollama model ready: {model}", flush=True)
+        return
+
+    print(f"Pulling Ollama model {model} (first run may take a while)...", flush=True)
+    result = subprocess.run(
+        ["ollama", "pull", model],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ollama pull {model!r} failed (rc={result.returncode}): "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    print(f"Pulled {model}", flush=True)
+
+
+def bench_ollama_chat(model: str, prompt_text: str, max_tokens: int = MAX_TOKENS) -> RunMetrics:
+    """Stream /api/chat; wall-clock TTFT + decode using final eval_count."""
+    payload = json.dumps({
+        "model": model,
+        "messages": chat_messages(prompt_text),
+        "stream": True,
+        "think": False,
+        "options": {"num_predict": max_tokens, "temperature": 0, "seed": 42},
+    }).encode()
+    req = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+
+    t0 = time.perf_counter()
+    t_first: float | None = None
+    eval_count = 0
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            for raw in resp:
+                if not raw.strip():
+                    continue
+                chunk = json.loads(raw)
+                if chunk.get("error"):
+                    raise RuntimeError(f"Ollama chat error for {model!r}: {chunk['error']}")
+                msg = chunk.get("message") or {}
+                content = msg.get("content") or msg.get("thinking") or ""
+                if content and t_first is None:
+                    t_first = time.perf_counter()
+                if chunk.get("done"):
+                    eval_count = chunk.get("eval_count", 0)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Ollama /api/chat HTTP {exc.code} for model {model!r}: {body}"
+        ) from exc
+
+    t_end = time.perf_counter()
+    if t_first is None:
+        return RunMetrics(0.0, 0.0, eval_count, (t_end - t0) * 1000.0)
+
+    ttft_ms = (t_first - t0) * 1000.0
+    total_ms = (t_end - t0) * 1000.0
+    tokens = eval_count if eval_count > 0 else 1
+    decode_tps = decode_tps_from_wallclock(tokens, ttft_ms, total_ms)
+    return RunMetrics(ttft_ms, decode_tps, tokens, total_ms)
+
+
+def ollama_unload(model: str) -> None:
+    payload = json.dumps({"model": model, "keep_alive": 0}).encode()
+    req = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+    except Exception:
+        pass
+
+
 # ── JSON output ────────────────────────────────────────────────────────────────
 
+REQUIRED_RESULT_KEYS = {
+    "ts", "host", "method", "model_label", "model_ref", "sampling",
+    "warmups", "runs_per_prompt", "prompt_set", "results",
+}
+REQUIRED_PROMPT_RESULT_KEYS = {
+    "prompt", "ttft_ms_runs", "decode_tps_runs", "completion_tokens_runs",
+    "ttft_ms_median", "decode_tps_median",
+}
+
+
+def validate_results_payload(payload: dict) -> None:
+    missing = REQUIRED_RESULT_KEYS - payload.keys()
+    if missing:
+        raise ValueError(f"results payload missing keys: {sorted(missing)}")
+    for entry in payload["results"]:
+        missing_entry = REQUIRED_PROMPT_RESULT_KEYS - entry.keys()
+        if missing_entry:
+            raise ValueError(f"prompt result missing keys: {sorted(missing_entry)}")
+
+
 def write_results(payload: dict) -> Path:
-    """Write benchmark results to JSON under benchmark/results/<method>_<modelSlug>_<utc-iso>.json.
-
-    Args:
-        payload: Dict with keys: ts, host, method, model_label, model_ref, drafter_ref,
-                 tree_budget, sampling, warmups, runs_per_prompt, results.
-
-    Returns:
-        Path to written file.
-    """
+    validate_results_payload(payload)
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
 
-    # Construct filename: method_modelSlug_timestamp.json
-    # modelSlug: model_ref with / → -, remove -4bit, etc. Keep it short.
     method = payload["method"]
     model_ref = payload["model_ref"]
-    model_slug = model_ref.replace("/", "-")  # mlx-community/Qwen3.6-27B-4bit → mlx-community-Qwen3.6-27B-4bit
+    model_slug = model_ref.replace("/", "-").replace(":", "-")
 
-    ts = payload["ts"]  # e.g. "20260426T220000Z"
+    ts = payload["ts"]
     filename = f"{method}_{model_slug}_{ts}.json"
     path = results_dir / filename
 
@@ -111,7 +516,41 @@ def write_results(payload: dict) -> Path:
 
     return path
 
+
 def get_timestamp_iso8601() -> str:
-    """Return current UTC time as ISO 8601 string without colons: 20260426T220000Z."""
     now = datetime.now(timezone.utc)
     return now.strftime("%Y%m%dT%H%M%SZ")
+
+
+def make_results_payload(
+    *,
+    ts: str,
+    method: str,
+    model_label: str,
+    model_ref: str,
+    results: list[dict[str, Any]],
+    drafter_ref: Optional[str] = None,
+    tree_budget: Optional[int] = None,
+    sampling: Optional[dict[str, Any]] = None,
+    warmups: int = WARMUPS,
+    runs_per_prompt: int = RUNS_PER_PROMPT,
+    prompt_set: str = PROMPT_SET,
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ts": ts,
+        "host": HOST,
+        "method": method,
+        "model_label": model_label,
+        "model_ref": model_ref,
+        "drafter_ref": drafter_ref,
+        "tree_budget": tree_budget,
+        "sampling": sampling or dict(DEFAULT_SAMPLING),
+        "warmups": warmups,
+        "runs_per_prompt": runs_per_prompt,
+        "prompt_set": prompt_set,
+        "results": results,
+    }
+    if extra:
+        payload.update(extra)
+    return payload

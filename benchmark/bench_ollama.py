@@ -1,48 +1,45 @@
 #!/usr/bin/env python3
-import json, urllib.request, threading, time, subprocess, sys
+"""
+Legacy Ollama probe — prefer benchmark/bench_compare.py for published results.
+
+Uses the same chat API and timing helpers as the main benchmark suite.
+"""
+import json
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
 
 try:
     import psutil
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
-    print("WARNING: psutil not available — CPU/mem monitoring disabled", flush=True)
 
-PROMPT = (
-    "Implement a red-black tree in Python with insert, delete, and search methods. "
-    "Include proper rebalancing logic and type hints."
+from benchmark._lib import (
+    DEFAULT_SAMPLING,
+    MAX_TOKENS,
+    PROMPT_CODE,
+    WARMUP_PROMPTS,
+    bench_ollama_chat,
+    chat_messages,
+    cooldown,
+    INTER_RUN_COOLDOWN_S,
 )
+
 RUNS = 3
 
 
 def get_ollama_models():
     result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
-    models = []
-    for line in result.stdout.strip().split("\n")[1:]:
-        if line.strip():
-            models.append(line.split()[0])
-    return models
-
-
-def get_ollama_procs():
-    if not HAS_PSUTIL:
-        return []
-    procs = []
-    for p in psutil.process_iter(["pid", "name", "cmdline"]):
-        try:
-            name = p.info["name"] or ""
-            cmd = " ".join(p.info["cmdline"] or [])
-            if "ollama" in name.lower() or "ollama" in cmd.lower():
-                procs.append(p)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    return procs
+    return [line.split()[0] for line in result.stdout.strip().split("\n")[1:] if line.strip()]
 
 
 class ResourceMonitor:
     def __init__(self):
-        self.samples_cpu = []
-        self.samples_mem_gb = []
+        self.samples_cpu: list[float] = []
+        self.samples_mem_gb: list[float] = []
         self._stop = threading.Event()
         self._thread = None
 
@@ -59,24 +56,26 @@ class ResourceMonitor:
             self._thread.join(timeout=3)
 
     def _run(self):
-        procs = get_ollama_procs()
-        if not procs:
+        if not HAS_PSUTIL:
             return
+        procs = [
+            p for p in psutil.process_iter(["pid", "name", "cmdline"])
+            if "ollama" in (p.info["name"] or "").lower()
+            or "ollama" in " ".join(p.info["cmdline"] or []).lower()
+        ]
         for p in procs:
             try:
                 p.cpu_percent(interval=None)
             except Exception:
                 pass
         time.sleep(0.15)
-
         while not self._stop.is_set():
-            cpu_total = 0.0
-            mem_total = 0
+            cpu_total = mem_total = 0
             for p in procs:
                 try:
                     cpu_total += p.cpu_percent(interval=None)
                     mem_total += p.memory_info().rss
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except Exception:
                     pass
             self.samples_cpu.append(cpu_total)
             self.samples_mem_gb.append(mem_total / (1024 ** 3))
@@ -85,26 +84,11 @@ class ResourceMonitor:
     def stats(self):
         if not self.samples_cpu:
             return 0.0, 0.0, 0.0
-        avg_cpu = sum(self.samples_cpu) / len(self.samples_cpu)
-        peak_cpu = max(self.samples_cpu)
-        peak_mem = max(self.samples_mem_gb) if self.samples_mem_gb else 0.0
-        return avg_cpu, peak_cpu, peak_mem
-
-
-def call(model, num_predict):
-    payload = json.dumps({
-        "model": model,
-        "prompt": PROMPT,
-        "stream": False,
-        "options": {"num_predict": num_predict, "temperature": 0},
-    }).encode()
-    req = urllib.request.Request(
-        "http://localhost:11434/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=600) as r:
-        return json.loads(r.read())
+        return (
+            sum(self.samples_cpu) / len(self.samples_cpu),
+            max(self.samples_cpu),
+            max(self.samples_mem_gb) if self.samples_mem_gb else 0.0,
+        )
 
 
 MODELS = get_ollama_models()
@@ -113,7 +97,8 @@ if not MODELS:
     sys.exit(1)
 
 print(f"Models: {', '.join(MODELS)}", flush=True)
-print(f"Runs per model: {RUNS} (+ 1 warmup)\n", flush=True)
+print(f"Timed prompt: coding (red-black tree)", flush=True)
+print(f"Runs per model: {RUNS}\n", flush=True)
 
 monitor = ResourceMonitor()
 summary = []
@@ -123,60 +108,39 @@ for model in MODELS:
     print(f"  {model}", flush=True)
     print(f"{'='*75}", flush=True)
 
-    print("  [warmup] loading model ...", end=" ", flush=True)
-    call(model, 64)
+    print("  [warmup]...", end=" ", flush=True)
+    bench_ollama_chat(model, WARMUP_PROMPTS[0], max_tokens=64)
     print("done", flush=True)
 
     runs = []
     for i in range(1, RUNS + 1):
+        if i > 1:
+            cooldown(INTER_RUN_COOLDOWN_S, f"between runs ({model})")
         print(f"  [run {i}/{RUNS}]", end=" ", flush=True)
         monitor.start()
-        d = call(model, 200)
+        m = bench_ollama_chat(model, PROMPT_CODE, max_tokens=MAX_TOKENS)
         monitor.stop()
-
-        pt  = d.get("prompt_eval_count", 0)
-        pns = d.get("prompt_eval_duration", 1)
-        gt  = d.get("eval_count", 0)
-        gns = d.get("eval_duration", 1)
-
-        ttft_ms   = pns / 1e6
-        cache_tps = pt / (pns / 1e9) if pns > 0 else 0.0
-        out_tps   = gt / (gns / 1e9) if gns > 0 else 0.0
         avg_cpu, peak_cpu, peak_mem = monitor.stats()
-
-        runs.append((ttft_ms, cache_tps, out_tps, avg_cpu, peak_cpu, peak_mem))
+        runs.append((m.ttft_ms, m.decode_tps, m.completion_tokens, avg_cpu, peak_mem))
         print(
-            f"TTFT {ttft_ms:6.0f} ms  |  cache {cache_tps:6.1f} t/s  |  out {out_tps:5.1f} t/s"
-            f"  |  CPU avg {avg_cpu:5.1f}% peak {peak_cpu:5.1f}%  |  Mem {peak_mem:.1f} GB",
+            f"TTFT {m.ttft_ms:6.0f} ms  |  out {m.decode_tps:5.1f} t/s"
+            f"  ({m.completion_tokens} tok)  |  CPU avg {avg_cpu:5.1f}%  |  Mem {peak_mem:.1f} GB",
             flush=True,
         )
 
     n = len(runs)
-    avg = tuple(sum(r[k] for r in runs) / n for k in range(6))
+    avg = tuple(sum(r[k] for r in runs) / n for k in range(5))
     print(
-        f"  {'AVG':>8}  TTFT {avg[0]:6.0f} ms  |  cache {avg[1]:6.1f} t/s  |  out {avg[2]:5.1f} t/s"
-        f"  |  CPU avg {avg[3]:5.1f}%  |  Mem {avg[5]:.1f} GB",
+        f"  {'AVG':>8}  TTFT {avg[0]:6.0f} ms  |  out {avg[1]:5.1f} t/s"
+        f"  ({avg[2]:.0f} tok)  |  CPU avg {avg[3]:5.1f}%  |  Mem {avg[4]:.1f} GB",
         flush=True,
     )
     summary.append((model, *avg))
 
-    # Running summary after each model completes
-    W = 75
-    print(f"\n  -- progress ({len(summary)}/{len(MODELS)} models) --")
-    print(f"  {'Model':<32}  {'TTFT':>8}  {'Cache t/s':>9}  {'Out t/s':>7}  {'CPU%':>6}  {'Mem GB':>7}")
-    print(f"  {'-'*32}  {'-'*8}  {'-'*9}  {'-'*7}  {'-'*6}  {'-'*7}")
-    for row in summary:
-        m, t, c, o, ac, _, pm = row
-        print(f"  {m:<32}  {t:6.0f} ms  {c:9.1f}  {o:7.1f}  {ac:6.1f}  {pm:7.1f}")
-    print(flush=True)
-
-W = 75
-print(f"\n\n{'='*W}")
-print(f"  BENCHMARK SUMMARY  (avg of {RUNS} runs, post-warmup)")
-print(f"{'='*W}")
-print(f"  {'Model':<32}  {'TTFT':>8}  {'Cache t/s':>9}  {'Out t/s':>7}  {'CPU%':>6}  {'Mem GB':>7}")
-print(f"  {'-'*32}  {'-'*8}  {'-'*9}  {'-'*7}  {'-'*6}  {'-'*7}")
-for row in summary:
-    model, ttft, cache, out, avg_cpu, _, peak_mem = row
-    print(f"  {model:<32}  {ttft:6.0f} ms  {cache:9.1f}  {out:7.1f}  {avg_cpu:6.1f}  {peak_mem:7.1f}")
+print(f"\n\n{'='*75}")
+print(f"  BENCHMARK SUMMARY  (avg of {RUNS} runs, /api/chat, seed={DEFAULT_SAMPLING['seed']})")
+print(f"{'='*75}")
+print(f"  {'Model':<32}  {'TTFT':>8}  {'Out t/s':>7}  {'Tokens':>7}  {'CPU%':>6}  {'Mem GB':>7}")
+for model, ttft, out, tokens, avg_cpu, peak_mem in summary:
+    print(f"  {model:<32}  {ttft:6.0f} ms  {out:7.1f}  {tokens:7.0f}  {avg_cpu:6.1f}  {peak_mem:7.1f}")
 print()
