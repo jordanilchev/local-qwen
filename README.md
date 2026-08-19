@@ -182,6 +182,19 @@ HF_HOME=~/Models/HuggingFace .venv/bin/python -m pytest tests/ -v
 
 ### 4. Run inference
 
+**Qwen 3.8 coding (recommended):** int4 target + DFlash2 draft (~16 tok/s on M4 32GB; target verifies every token).
+
+```bash
+HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_dflash2.py "Write a Python LRU cache class."
+
+# Override defaults
+MAX_TOKENS=512 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_dflash2.py "Your prompt"
+```
+
+Env: `TARGET`, `DRAFT`, `DRAFT_BITS` (default 4), `BLOCK_SIZE` (default capped at 5 for int4), `MAX_TOKENS`.
+
+**Qwen 3.5 / DDTree (legacy):**
+
 ```bash
 # Single prompt (reads from args or stdin)
 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_ddtree.py "Explain transformers in one paragraph."
@@ -192,17 +205,44 @@ MAX_TOKENS=512 TREE_BUDGET=3 HF_HOME=~/Models/HuggingFace .venv/bin/python scrip
 
 ### 5. Start the OpenAI-compatible server
 
+**Qwen 3.8 + DFlash2 (recommended for Cursor / Continue):**
+
+```bash
+HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/dflash2_server.py --port 8007
+```
+
+Custom model id (use exactly in Cursor): **`qwen3.8-27b-dflash2`**
+
+```bash
+curl -s http://localhost:8007/v1/models | python3 -m json.tool
+curl -s http://localhost:8007/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.8-27b-dflash2","messages":[{"role":"user","content":"Say hi."}],"max_tokens":32}' \
+  | python3 -m json.tool
+```
+
+#### Cursor model picker
+
+1. **Cursor Settings → Models → OpenAI**
+2. **API key:** any non-empty string (e.g. `local`)
+3. **Override OpenAI Base URL:** on → `http://localhost:8007/v1`  
+   Cursor’s cloud backend may not reach raw `localhost`; if requests time out, expose the port with **ngrok** or Cloudflare Tunnel and use `https://YOUR-TUNNEL/v1` instead.
+4. **Add custom model:** `qwen3.8-27b-dflash2` (must match `/v1/models`)
+5. Enable that model in the picker; turn **Override** off when switching back to hosted models.
+
+**Legacy DDTree / Qwen 3.5:**
+
 ```bash
 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/ddtree_server.py --port 8006
 ```
 
-Point any OpenAI-compatible client (Continue.dev, Cursor, LM Studio, etc.) at `http://localhost:8006/v1`.
+Point any OpenAI-compatible client at `http://localhost:8006/v1` or `http://localhost:8007/v1`.
 
 ```bash
-# Quick smoke test
-curl http://localhost:8006/v1/chat/completions \
+# Quick smoke test (DFlash2)
+curl http://localhost:8007/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"Say hi."}],"max_tokens":32}' \
+  -d '{"model":"qwen3.8-27b-dflash2","messages":[{"role":"user","content":"Say hi."}],"max_tokens":32}' \
   | python3 -m json.tool
 ```
 
@@ -256,8 +296,10 @@ local-qwen/
 │   ├── ENVIRONMENT.md                # Hardware/software pin + run log
 │   └── results/                      # JSON output, one file per (method, model[, budget])
 ├── scripts/
-│   ├── infer_ddtree.py      # Interactive single-turn inference
-│   └── ddtree_server.py     # OpenAI-compatible server (port 8006)
+│   ├── infer_dflash2.py     # Qwen3.8 int4 + official DFlash2 (recommended for coding)
+│   ├── dflash2_server.py    # OpenAI-compatible server for Cursor (port 8007)
+│   ├── infer_ddtree.py      # Interactive single-turn inference (DDTree / 3.5)
+│   └── ddtree_server.py     # OpenAI-compatible server (port 8006, DDTree)
 ├── tests/
 │   └── test_ddtree_smoke.py # Import + short inference smoke tests
 ├── vendor/
