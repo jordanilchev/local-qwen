@@ -1,0 +1,162 @@
+{
+  "ts": "20260819T064040Z",
+  "session_id": "20260819T044632Z",
+  "family_id": "3.6-35b-moe",
+  "host": "M4-MBA-32GB",
+  "method": "ollama",
+  "model_label": "Qwen3.6-35B-MoE [MLX-int4-DWQ]",
+  "model_ref": "qwen3.6:35b",
+  "drafter_ref": null,
+  "tree_budget": null,
+  "sampling": {
+    "temperature": 0,
+    "seed": 42,
+    "max_tokens": 200,
+    "enable_thinking": false
+  },
+  "warmups": 2,
+  "runs_per_prompt": 5,
+  "prompt_set": "coding",
+  "results": [
+    {
+      "prompt": "code-algo",
+      "ttft_ms_runs": [
+        780.2837919989543,
+        351.92212499896414,
+        289.25600000002305,
+        285.8935830008704,
+        280.6587920022139
+      ],
+      "decode_tps_runs": [
+        29.662877116107957,
+        29.950753210648674,
+        29.894665247164266,
+        29.970132088656317,
+        29.89943235778764
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        7489.005916999304,
+        6996.162374998676,
+        6945.962082998449,
+        6925.837624999986,
+        6936.303541999223
+      ],
+      "ttft_ms_median": 289.25600000002305,
+      "decode_tps_median": 29.89943235778764,
+      "completion_tokens_median": 200,
+      "total_ms_median": 6945.962082998449,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "parity_checked": false,
+      "parity_match": null,
+      "parity_method": "ollama \u00b7 Qwen3.6-35B-MoE [MLX-int4-DWQ]",
+      "avg_acceptance": null
+    },
+    {
+      "prompt": "code-async",
+      "ttft_ms_runs": [
+        659.2520000012883,
+        321.9105829994078,
+        282.421333999082,
+        279.9412079984904,
+        281.32758300125715
+      ],
+      "decode_tps_runs": [
+        29.58649326033157,
+        29.89466393580808,
+        29.817184883528448,
+        29.982875672299723,
+        29.832552989248565
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        7385.294125000655,
+        6978.616958000202,
+        6956.424959000287,
+        6917.063082997629,
+        6951.893125002243
+      ],
+      "ttft_ms_median": 282.421333999082,
+      "decode_tps_median": 29.832552989248565,
+      "completion_tokens_median": 200,
+      "total_ms_median": 6956.424959000287,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "parity_checked": false,
+      "parity_match": null,
+      "parity_method": "ollama \u00b7 Qwen3.6-35B-MoE [MLX-int4-DWQ]",
+      "avg_acceptance": null
+    },
+    {
+      "prompt": "code-cache",
+      "ttft_ms_runs": [
+        663.0110829974001,
+        298.1712500004505,
+        289.79674999936833,
+        283.40945899981307,
+        282.80054200149607
+      ],
+      "decode_tps_runs": [
+        29.49793131096111,
+        29.878204654713105,
+        29.82912017666446,
+        29.89717194624276,
+        29.876449247068937
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        7409.246874998644,
+        6958.544665998488,
+        6961.129957999219,
+        6939.557417001197,
+        6943.56529200013
+      ],
+      "ttft_ms_median": 289.79674999936833,
+      "decode_tps_median": 29.876449247068937,
+      "completion_tokens_median": 200,
+      "total_ms_median": 6958.544665998488,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "parity_checked": false,
+      "parity_match": null,
+      "parity_method": "ollama \u00b7 Qwen3.6-35B-MoE [MLX-int4-DWQ]",
+      "avg_acceptance": null
+    }
+  ],
+  "ollama_quant": "GGUF-Q4_K_M",
+  "includes_http_overhead": true
+}

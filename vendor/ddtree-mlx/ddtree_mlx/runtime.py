@@ -24,6 +24,70 @@ from .cache import fast_path_commit, tree_aware_path_commit
 DEFAULT_TREE_BUDGET = int(os.environ.get("DDTREE_BUDGET", "4"))
 
 
+def _is_dflash2_draft(draft_model: Any) -> bool:
+    """z-lab DFlash2 drafts expose hidden_states() + make_cache(); DFlash1 does not."""
+    return hasattr(draft_model, "hidden_states") and hasattr(draft_model, "make_cache")
+
+
+def _draft_layer_ids(draft_model: Any) -> list[int]:
+    cfg = getattr(draft_model, "config", None)
+    if cfg is not None and getattr(cfg, "target_layer_ids", None) is not None:
+        return [int(x) for x in cfg.target_layer_ids]
+    return [int(x) for x in draft_model.target_layer_ids]
+
+
+def _draft_block_size(draft_model: Any) -> int:
+    cfg = getattr(draft_model, "config", None)
+    if cfg is not None and getattr(cfg, "block_size", None) is not None:
+        return max(1, int(cfg.block_size))
+    return max(1, int(draft_model.block_size))
+
+
+def _draft_mask_id(draft_model: Any) -> int:
+    cfg = getattr(draft_model, "config", None)
+    if cfg is not None and getattr(cfg, "mask_token_id", None) is not None:
+        return int(cfg.mask_token_id)
+    return int(draft_model.mask_token_id)
+
+
+def _make_draft_cache(draft_model: Any) -> list[Any]:
+    if _is_dflash2_draft(draft_model):
+        return draft_model.make_cache()
+    from dflash_mlx.model import ContextOnlyDraftKVCache
+
+    draft_sink = int(os.environ.get("DFLASH_DRAFT_SINK", "64"))
+    draft_window = int(os.environ.get("DFLASH_DRAFT_WINDOW", "1024"))
+    return [
+        ContextOnlyDraftKVCache(sink_size=draft_sink, window_size=draft_window)
+        for _ in range(len(draft_model.layers))
+    ]
+
+
+def _draft_block_logits(
+    *,
+    draft_model: Any,
+    target_model: Any,
+    block_token_ids: mx.array,
+    target_hidden: mx.array,
+    draft_cache: list[Any],
+    lm_head_logits,
+    target_embed_tokens,
+):
+    """One block-diffusion draft step. DFlash2 takes token ids; DFlash1 takes embeddings."""
+    if _is_dflash2_draft(draft_model):
+        hidden = draft_model.hidden_states(
+            block_token_ids[None], target_hidden, draft_cache
+        )
+        return draft_model.compute_logits(hidden[:, 1:, :])
+    noise_embedding = target_embed_tokens(target_model)(block_token_ids[None])
+    draft_hidden = draft_model(
+        noise_embedding=noise_embedding,
+        target_hidden=target_hidden,
+        cache=draft_cache,
+    )
+    return lm_head_logits(target_model, draft_hidden[:, 1:, :])
+
+
 def _tree_token_id(tree: DDTree, root_token: int, tree_index: int) -> int:
     if tree_index == 0:
         return int(root_token)
@@ -135,26 +199,25 @@ def generate_ddtree_once(
         _restore_target_cache_after_acceptance,
         _verify_target_block,
     )
-    from dflash_mlx.model import ContextOnlyDraftKVCache
-
     prompt_array = mx.array(prompt_tokens, dtype=mx.uint32)[None]
     prompt_len = len(prompt_tokens)
     stop_token_array = (
         mx.array(stop_token_ids, dtype=mx.uint32) if stop_token_ids else None
     )
 
+    if _is_dflash2_draft(draft_model) and getattr(draft_model, "embed_tokens", None) is None:
+        draft_model.bind(target_model)
+
+    layer_ids = _draft_layer_ids(draft_model)
+    mask_id = _draft_mask_id(draft_model)
+
     # Create caches
     target_cache = make_target_cache(
         target_model,
         enable_speculative_linear_cache=True,
     )
-    draft_sink = int(os.environ.get("DFLASH_DRAFT_SINK", "64"))
-    draft_window = int(os.environ.get("DFLASH_DRAFT_WINDOW", "1024"))
-    draft_cache = [
-        ContextOnlyDraftKVCache(sink_size=draft_sink, window_size=draft_window)
-        for _ in range(len(draft_model.layers))
-    ]
-    capture_layer_ids = {int(lid) + 1 for lid in draft_model.target_layer_ids}
+    draft_cache = _make_draft_cache(draft_model)
+    capture_layer_ids = {int(lid) + 1 for lid in layer_ids}
 
     # --- PREFILL ---
     start_ns = time.perf_counter_ns()
@@ -175,10 +238,10 @@ def generate_ddtree_once(
         prefill_logits[:, -1, :], suppress_mask
     ).reshape(-1)
     target_hidden = extract_context_feature_from_dict(
-        prefill_hidden, list(draft_model.target_layer_ids)
+        prefill_hidden, layer_ids
     )
 
-    block_size = max(1, int(draft_model.block_size))
+    block_size = _draft_block_size(draft_model)
     generated_tokens: list[int] = []
     start = prompt_len
     cycles_completed = 0
@@ -248,19 +311,21 @@ def generate_ddtree_once(
 
         cycle_start_ns = time.perf_counter_ns()
         block_token_ids = mx.full(
-            (block_len,), draft_model.mask_token_id, dtype=mx.uint32
+            (block_len,), mask_id, dtype=mx.uint32
         )
         block_token_ids[0] = staged_first[0] if staged_first.ndim > 0 else staged_first
 
         if block_len > 1:
             draft_start_ns = time.perf_counter_ns()
-            noise_embedding = _target_embed_tokens(target_model)(block_token_ids[None])
-            draft_hidden = draft_model(
-                noise_embedding=noise_embedding,
+            draft_logits = _draft_block_logits(
+                draft_model=draft_model,
+                target_model=target_model,
+                block_token_ids=block_token_ids,
                 target_hidden=target_hidden,
-                cache=draft_cache,
+                draft_cache=draft_cache,
+                lm_head_logits=_lm_head_logits,
+                target_embed_tokens=_target_embed_tokens,
             )
-            draft_logits = _lm_head_logits(target_model, draft_hidden[:, 1:, :])
             mx.async_eval(draft_logits)
             mx.eval(draft_logits)
             drafted = greedy_tokens_with_mask(draft_logits, suppress_mask).squeeze(0)
@@ -288,7 +353,7 @@ def generate_ddtree_once(
         committed_segment = verify_token_ids[:commit_count]
         committed_hidden = extract_context_feature_from_dict(
             verify_hidden_raw,
-            list(draft_model.target_layer_ids),
+            layer_ids,
         )[:, :commit_count, :]
         mx.eval(committed_hidden, posterior)
 
@@ -377,17 +442,19 @@ def generate_ddtree_once(
 
         # --- DRAFT ---
         draft_start = time.perf_counter_ns()
-        block_token_ids = mx.full((block_len,), draft_model.mask_token_id, dtype=mx.uint32)
+        block_token_ids = mx.full((block_len,), mask_id, dtype=mx.uint32)
         block_token_ids[0] = staged_first[0] if staged_first.ndim > 0 else staged_first
 
         if block_len > 1:
-            noise_embedding = _target_embed_tokens(target_model)(block_token_ids[None])
-            draft_hidden = draft_model(
-                noise_embedding=noise_embedding,
+            draft_logits = _draft_block_logits(
+                draft_model=draft_model,
+                target_model=target_model,
+                block_token_ids=block_token_ids,
                 target_hidden=target_hidden,
-                cache=draft_cache,
+                draft_cache=draft_cache,
+                lm_head_logits=_lm_head_logits,
+                target_embed_tokens=_target_embed_tokens,
             )
-            draft_logits = _lm_head_logits(target_model, draft_hidden[:, 1:, :])
             # Skip mx.eval(draft_logits) — _build_tree_from_mlx_logits evals
             # only the top-k subset, avoiding full vocab-size materialization
         else:
@@ -407,7 +474,7 @@ def generate_ddtree_once(
             )
             _eval_logits_and_captured(fwd_logits, fwd_hidden)
             target_hidden = extract_context_feature_from_dict(
-                fwd_hidden, list(draft_model.target_layer_ids)
+                fwd_hidden, layer_ids
             )
             staged_first = greedy_tokens_with_mask(
                 fwd_logits[:, -1, :], suppress_mask
@@ -474,7 +541,7 @@ def generate_ddtree_once(
         # --- COMMIT ---
         commit_start = time.perf_counter_ns()
         all_hidden = extract_context_feature_from_dict(
-            verify_hidden, list(draft_model.target_layer_ids)
+            verify_hidden, layer_ids
         )
         use_fast_path = (
             accepted_indices == dfs_order_list[: len(accepted_indices)]
@@ -508,7 +575,7 @@ def generate_ddtree_once(
             )
             _eval_logits_and_captured(commit_logits, commit_hidden_raw)
             committed_hidden = extract_context_feature_from_dict(
-                commit_hidden_raw, list(draft_model.target_layer_ids)
+                commit_hidden_raw, layer_ids
             )
             # Use the REAL bonus token from sequential forward, not tree logits
             bonus_token = int(
@@ -569,7 +636,7 @@ def generate_ddtree_once(
             _eval_logits_and_captured(suffix_logits, suffix_hidden_raw)
             hidden_chunks.append(
                 extract_context_feature_from_dict(
-                    suffix_hidden_raw, list(draft_model.target_layer_ids)
+                    suffix_hidden_raw, layer_ids
                 )
             )
             current_index = accepted_indices[-1]
@@ -593,7 +660,7 @@ def generate_ddtree_once(
                 _eval_logits_and_captured(suffix_logits, suffix_hidden_raw)
                 hidden_chunks.append(
                     extract_context_feature_from_dict(
-                        suffix_hidden_raw, list(draft_model.target_layer_ids)
+                        suffix_hidden_raw, layer_ids
                     )
                 )
                 next_token = int(

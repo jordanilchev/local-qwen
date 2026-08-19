@@ -2,6 +2,8 @@
 """
 Benchmark: vllm-mlx (EngineCore) on MLX targets.
 
+Prefer `benchmark.bench_session` for fair single-session comparisons.
+
 Usage:
     HF_HOME=~/Models/HuggingFace .venv/bin/python -m benchmark.bench_vllm
     VLLM_ONLY=35b HF_HOME=~/Models/HuggingFace .venv/bin/python -m benchmark.bench_vllm
@@ -29,14 +31,21 @@ from benchmark._lib import (
     run_prompt_suite,
     write_results,
 )
+from benchmark.models import MODEL_FAMILIES, family_label
+
+SESSION_ID = os.environ.get("BENCH_SESSION_ID")
+VLLM_GPU_MEM = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.95"))
 
 ALL_MLX_MODELS = [
-    ("Qwen3.6-27B-dense  [MLX-int4]", "mlx-community/Qwen3.6-27B-4bit"),
-    ("Qwen3.6-35B-MoE    [MLX-int4-DWQ]", "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"),
+    (family_label(f), f.mlx_ref, f.id)
+    for f in MODEL_FAMILIES
+    if f.mlx_ref
 ]
 _only = os.environ.get("VLLM_ONLY", "").lower()
 if _only:
-    MLX_MODELS = [(l, r) for l, r in ALL_MLX_MODELS if _only in l.lower() or _only in r.lower()]
+    MLX_MODELS = [
+        (l, r, fid) for l, r, fid in ALL_MLX_MODELS if _only in l.lower() or _only in r.lower()
+    ]
     assert MLX_MODELS, f"VLLM_ONLY={_only!r} matched no models"
 else:
     MLX_MODELS = ALL_MLX_MODELS
@@ -52,11 +61,15 @@ from vllm_mlx.utils.tokenizer import load_model_with_fallback
 
 results_by_model = {}
 
-for label, mlx_ref in MLX_MODELS:
+for label, mlx_ref, family_id in MLX_MODELS:
     print(f"\nLoading {mlx_ref} via vllm_mlx...", flush=True)
     t0 = time.perf_counter()
     model, tokenizer = load_model_with_fallback(mlx_ref)
-    engine = EngineCore(model, tokenizer, EngineConfig(model_name=mlx_ref, gpu_memory_utilization=0.7))
+    engine = EngineCore(
+        model,
+        tokenizer,
+        EngineConfig(model_name=mlx_ref, gpu_memory_utilization=VLLM_GPU_MEM),
+    )
     print(f"Loaded in {time.perf_counter() - t0:.1f}s.", flush=True)
 
     results_this_model = {}
@@ -69,7 +82,7 @@ for label, mlx_ref in MLX_MODELS:
         results_this_model[prompt_name] = {"avg_acceptance": None, **suite}
         cooldown(INTER_PROMPT_COOLDOWN_S, f"between prompts of vllm-mlx/{label}")
 
-    results_by_model[(label, mlx_ref)] = results_this_model
+    results_by_model[(label, mlx_ref, family_id)] = results_this_model
 
     del engine, model, tokenizer
     gc.collect()
@@ -78,9 +91,11 @@ for label, mlx_ref in MLX_MODELS:
 cooldown(POST_BENCH_COOLDOWN_S, "post-bench: final cooldown")
 
 ts = get_timestamp_iso8601()
-for (label, model_ref), results_dict in results_by_model.items():
+for (label, model_ref, family_id), results_dict in results_by_model.items():
     payload = make_results_payload(
         ts=ts,
+        session_id=SESSION_ID,
+        family_id=family_id,
         method="vllm-mlx",
         model_label=label,
         model_ref=model_ref,
@@ -92,6 +107,7 @@ for (label, model_ref), results_dict in results_by_model.items():
         warmups=WARMUPS,
         runs_per_prompt=RUNS_PER_PROMPT,
         prompt_set=PROMPT_SET,
+        extra={"vllm_gpu_memory_utilization": VLLM_GPU_MEM},
     )
     path = write_results(payload)
     print(f"Wrote vllm-mlx {label} results to {path}", flush=True)
@@ -100,7 +116,7 @@ print(f"\n\n{'='*70}")
 print(f"  vllm-mlx SUMMARY")
 print(f"  {WARMUPS} warmups · {RUNS_PER_PROMPT} runs per prompt · median")
 print(f"{'='*70}")
-for (label, _), results_dict in sorted(results_by_model.items()):
+for (label, _, _), results_dict in sorted(results_by_model.items()):
     print(f"\n  vllm-mlx {label}")
     print(f"  {'-'*60}")
     print(f"  {'Prompt':<12}  {'TTFT (ms)':>10}  {'Decode (tok/s)':>15}")

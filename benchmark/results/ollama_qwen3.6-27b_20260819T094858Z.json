@@ -1,0 +1,162 @@
+{
+  "ts": "20260819T094858Z",
+  "session_id": "20260819T044632Z",
+  "family_id": "3.6-27b",
+  "host": "M4-MBA-32GB",
+  "method": "ollama",
+  "model_label": "Qwen3.6-27B-dense [MLX-int4]",
+  "model_ref": "qwen3.6:27b",
+  "drafter_ref": null,
+  "tree_budget": null,
+  "sampling": {
+    "temperature": 0,
+    "seed": 42,
+    "max_tokens": 200,
+    "enable_thinking": false
+  },
+  "warmups": 2,
+  "runs_per_prompt": 5,
+  "prompt_set": "coding",
+  "results": [
+    {
+      "prompt": "code-algo",
+      "ttft_ms_runs": [
+        1919.5514579987503,
+        802.4846660046023,
+        754.5564160027425,
+        754.1724999973667,
+        759.9946249974892
+      ],
+      "decode_tps_runs": [
+        5.712227569577619,
+        5.729175318609696,
+        5.702039326127109,
+        5.670622841177047,
+        5.660994555520094
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        36757.09908299905,
+        35536.977666000894,
+        35654.3507910028,
+        35847.31933299918,
+        35912.828291999176
+      ],
+      "ttft_ms_median": 759.9946249974892,
+      "decode_tps_median": 5.702039326127109,
+      "completion_tokens_median": 200,
+      "total_ms_median": 35847.31933299918,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "parity_checked": false,
+      "parity_match": null,
+      "parity_method": "ollama \u00b7 Qwen3.6-27B-dense [MLX-int4]",
+      "avg_acceptance": null
+    },
+    {
+      "prompt": "code-async",
+      "ttft_ms_runs": [
+        2078.599917003885,
+        870.9031249964028,
+        755.773249999038,
+        758.0678750018706,
+        755.3303749955376
+      ],
+      "decode_tps_runs": [
+        5.435260763351633,
+        5.5101822925089206,
+        5.598040199267119,
+        5.621307922608551,
+        5.627304599113718
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        38691.37870800478,
+        36985.86074999912,
+        36303.928124994854,
+        36159.08179200051,
+        36118.61958300142
+      ],
+      "ttft_ms_median": 758.0678750018706,
+      "decode_tps_median": 5.598040199267119,
+      "completion_tokens_median": 200,
+      "total_ms_median": 36303.928124994854,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "parity_checked": false,
+      "parity_match": null,
+      "parity_method": "ollama \u00b7 Qwen3.6-27B-dense [MLX-int4]",
+      "avg_acceptance": null
+    },
+    {
+      "prompt": "code-cache",
+      "ttft_ms_runs": [
+        2085.02249999583,
+        850.3024999954505,
+        759.8902499958058,
+        753.6715419992106,
+        753.3239999975194
+      ],
+      "decode_tps_runs": [
+        5.401274185056681,
+        5.502620446709569,
+        5.595145846455321,
+        5.631633806831425,
+        5.634879940812664
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        38928.180832997896,
+        37014.89025000046,
+        36326.434082999185,
+        36089.77591700386,
+        36069.071999998414
+      ],
+      "ttft_ms_median": 759.8902499958058,
+      "decode_tps_median": 5.595145846455321,
+      "completion_tokens_median": 200,
+      "total_ms_median": 36326.434082999185,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "parity_checked": false,
+      "parity_match": null,
+      "parity_method": "ollama \u00b7 Qwen3.6-27B-dense [MLX-int4]",
+      "avg_acceptance": null
+    }
+  ],
+  "ollama_quant": "GGUF-Q4_K_M",
+  "includes_http_overhead": true
+}

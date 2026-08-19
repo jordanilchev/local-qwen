@@ -1,2 +1,3 @@
 dflash-mlx
+dflash
 -e vendor/ddtree-mlx

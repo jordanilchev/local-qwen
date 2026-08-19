@@ -1,0 +1,177 @@
+{
+  "ts": "20260819T094858Z",
+  "session_id": "20260819T044632Z",
+  "family_id": "3.6-27b",
+  "host": "M4-MBA-32GB",
+  "method": "llamacpp-mtp",
+  "model_label": "Qwen3.6-27B-dense [MLX-int4]",
+  "model_ref": "unsloth/Qwen3.6-27B-MTP-GGUF:UD-Q4_K_XL",
+  "drafter_ref": "unsloth/Qwen3.6-27B-MTP-GGUF:UD-Q4_K_XL (bundled MTP heads)",
+  "tree_budget": 2,
+  "sampling": {
+    "temperature": 0,
+    "seed": 42,
+    "max_tokens": 200,
+    "enable_thinking": false
+  },
+  "warmups": 2,
+  "runs_per_prompt": 5,
+  "prompt_set": "coding",
+  "results": [
+    {
+      "prompt": "code-algo",
+      "ttft_ms_runs": [
+        1924.9671669967938,
+        1951.7773330007913,
+        1910.1095419973717,
+        1933.0794160050573,
+        1914.9827090004692
+      ],
+      "decode_tps_runs": [
+        5.565736376918292,
+        5.410805984577523,
+        5.375886364459444,
+        5.297346250806442,
+        5.2942664652585405
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        37679.44537499716,
+        38730.03191599855,
+        38927.26104200119,
+        39499.0587909997,
+        39502.81499999983
+      ],
+      "ttft_ms_median": 1924.9671669967938,
+      "decode_tps_median": 5.375886364459444,
+      "completion_tokens_median": 200,
+      "total_ms_median": 38927.26104200119,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "avg_acceptance": 0.8881118881118881,
+      "accept_ratio_runs": [
+        0.8881118881118881,
+        0.8881118881118881,
+        0.8881118881118881,
+        0.8881118881118881,
+        0.8881118881118881
+      ],
+      "acceptance_unit": "draft_ratio"
+    },
+    {
+      "prompt": "code-async",
+      "ttft_ms_runs": [
+        2167.754417001561,
+        2027.491792003275,
+        1976.6910830003326,
+        1966.249416997016,
+        1977.7969999995548
+      ],
+      "decode_tps_runs": [
+        4.556288014398194,
+        4.722105897118065,
+        4.887102778757631,
+        4.967290103494953,
+        4.983782556556423
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        45843.65887500462,
+        44169.70637500344,
+        42696.113000005425,
+        42028.334750000795,
+        41907.3079170048
+      ],
+      "ttft_ms_median": 1977.7969999995548,
+      "decode_tps_median": 4.887102778757631,
+      "completion_tokens_median": 200,
+      "total_ms_median": 42696.113000005425,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "avg_acceptance": 0.8378378378378378,
+      "accept_ratio_runs": [
+        0.8378378378378378,
+        0.8378378378378378,
+        0.8378378378378378,
+        0.8378378378378378,
+        0.8378378378378378
+      ],
+      "acceptance_unit": "draft_ratio"
+    },
+    {
+      "prompt": "code-cache",
+      "ttft_ms_runs": [
+        2261.442333998275,
+        1989.7710000004736,
+        1963.8512919991626,
+        1964.2283749999478,
+        1958.1035830051405
+      ],
+      "decode_tps_runs": [
+        5.079826841127635,
+        5.277872249407886,
+        5.5505084526511155,
+        5.641110734880806,
+        5.647788859088387
+      ],
+      "completion_tokens_runs": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "total_ms_runs": [
+        41436.00599999627,
+        39694.359249995614,
+        37816.42258300417,
+        37240.968958998565,
+        37193.13183300255
+      ],
+      "ttft_ms_median": 1964.2283749999478,
+      "decode_tps_median": 5.5505084526511155,
+      "completion_tokens_median": 200,
+      "total_ms_median": 37816.42258300417,
+      "output_token_ids_sample_runs": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "avg_acceptance": 0.9632352941176471,
+      "accept_ratio_runs": [
+        0.9632352941176471,
+        0.9632352941176471,
+        0.9632352941176471,
+        0.9632352941176471,
+        0.9632352941176471
+      ],
+      "acceptance_unit": "draft_ratio"
+    }
+  ],
+  "gguf_quant": "GGUF-Q4_K_XL",
+  "includes_http_overhead": true
+}

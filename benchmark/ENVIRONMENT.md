@@ -20,16 +20,20 @@
 
 ## Methodology constraints
 
+- **Single-session comparisons:** `benchmark.bench_session` writes all methods for a family with the same `session_id` and `ts`.
+- **Order per family (MLX first):** plain-mlx → vllm-mlx → ddtree-mlx → ollama → llama.cpp [→ llamacpp-mtp].
+- **Families:** `3.6-35b-moe`, `3.8-27b`, `3.6-27b` (see `benchmark/models.py`).
 - One benchmark at a time; no other CPU loads
 - 60 s pre-bench cooldown; **60 s between timed runs**; 60 s between prompts; 90 s between configs/models
-- All backends use chat-formatted input with `enable_thinking=False` (Ollama `/api/chat`, MLX `apply_chat_template`, llama.cpp `chat_template_kwargs`)
+- Plain MLX loads **target only** (drafter unloaded); DDTree loads target+drafter in a later phase
+- All backends use chat-formatted input with `enable_thinking=False`
 - Warmup prompts differ from timed prompts to avoid prefix-cache TTFT skew
-- Decode tok/s + TTFT both reported; per-run `completion_tokens` recorded in JSON
-- Sampling: temperature=0, seed=42 where the backend supports it
+- DDTree TTFT: wall-clock proportional to `prefill_us/elapsed_us` (internal value in `ttft_prefill_us_ms`)
+- Token parity: first 32 output IDs compared vs plain-mlx per prompt
+- Sampling: temperature=0; `mx.random.seed(42)` for MLX; Ollama/llama.cpp seed=42
 - 2 warmups + 5 timed runs, median reported
-- Prompt set: `coding` (`code-algo`, `code-async`, `code-cache`) — see `benchmark/_lib.py`
-- DDTree default `tree_budget=3` (best on M4 per sweep)
-- Software versions pinned in this file
+- Prompt set: `coding` (`code-algo`, `code-async`, `code-cache`)
+- vllm-mlx: `gpu_memory_utilization=0.95` (override via `VLLM_GPU_MEMORY_UTILIZATION`)
 
 ## Run log
 

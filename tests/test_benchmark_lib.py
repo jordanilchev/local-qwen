@@ -6,11 +6,14 @@ from benchmark._lib import (
     DEFAULT_SAMPLING,
     PROMPT_SET,
     RunMetrics,
+    check_output_token_parity,
     decode_tps_from_wallclock,
     make_results_payload,
     runs_to_result_dict,
     validate_results_payload,
+    wall_ttft_from_ddtree_phases,
 )
+from benchmark.models import MODEL_FAMILIES, get_family
 
 
 def test_decode_tps_from_wallclock_basic():
@@ -23,17 +26,31 @@ def test_decode_tps_single_token():
     assert decode_tps_from_wallclock(1, ttft_ms=50.0, total_ms=200.0) == 0.0
 
 
+def test_wall_ttft_from_ddtree_phases():
+    # 50% prefill internally -> 50% of wall clock for TTFT
+    ttft = wall_ttft_from_ddtree_phases(total_ms=1000.0, prefill_us=500.0, elapsed_us=1000.0)
+    assert ttft == pytest.approx(500.0)
+
+
 def test_runs_to_result_dict_medians():
     runs = [
-        RunMetrics(100.0, 10.0, 50, 600.0),
-        RunMetrics(200.0, 20.0, 60, 800.0),
-        RunMetrics(150.0, 15.0, 55, 700.0),
+        RunMetrics(100.0, 10.0, 50, 600.0, output_token_ids=(1, 2, 3)),
+        RunMetrics(200.0, 20.0, 60, 800.0, output_token_ids=(4, 5)),
+        RunMetrics(150.0, 15.0, 55, 700.0, output_token_ids=(6,)),
     ]
     out = runs_to_result_dict(runs)
     assert out["ttft_ms_median"] == 150.0
     assert out["decode_tps_median"] == 15.0
     assert out["completion_tokens_median"] == 55
     assert len(out["ttft_ms_runs"]) == 3
+    assert out["output_token_ids_sample_runs"] == [[1, 2, 3], [4, 5], [6]]
+
+
+def test_check_output_token_parity():
+    ok = check_output_token_parity((1, 2, 3), (1, 2, 3), method="test", prompt="p")
+    assert ok["parity_match"] is True
+    bad = check_output_token_parity((1, 2, 3), (1, 2, 9), method="test", prompt="p")
+    assert bad["parity_match"] is False
 
 
 def test_resolve_draft_ref_qwen36_moe():
@@ -43,12 +60,43 @@ def test_resolve_draft_ref_qwen36_moe():
     assert ref == "z-lab/Qwen3.6-35B-A3B-DFlash"
 
 
+def test_qwen38_family_has_dflash2_drafter():
+    family = get_family("3.8-27b")
+    assert family.mlx_ref == "mlx-community/Qwen3.8-27B-4bit"
+    assert family.draft_ref == "z-lab/Qwen3.8-27B-DFlash2"
+    assert family.ollama_ref == "qwen3.8:27b-q4_K_M"
+
+
+def test_session_methods_include_official_dflash2():
+    from benchmark.bench_session import DEFAULT_SESSION_METHODS, methods_to_run
+
+    assert "dflash2-mlx" in DEFAULT_SESSION_METHODS
+    assert methods_to_run() == list(DEFAULT_SESSION_METHODS)
+
+
+def test_bench_methods_env_filters_session_steps(monkeypatch):
+    from benchmark import bench_session
+
+    monkeypatch.setenv("BENCH_METHODS", "dflash2-mlx,ollama")
+    assert bench_session.methods_to_run() == ["dflash2-mlx", "ollama"]
+
+
+def test_model_families_include_38():
+    ids = {f.id for f in MODEL_FAMILIES}
+    assert "3.8-27b" in ids
+
+
 def test_load_ddtree_runtime_requires_drafter():
     from benchmark._lib import load_ddtree_runtime
 
-    target, tok, draft, loaded_ref, stop = load_ddtree_runtime(
-        "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"
-    )
+    try:
+        target, tok, draft, loaded_ref, stop = load_ddtree_runtime(
+            "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"
+        )
+    except RuntimeError as exc:
+        if "draft_model is None" in str(exc):
+            pytest.skip("DFlash drafter not loadable offline in this environment")
+        raise
     assert draft is not None
     assert loaded_ref == "z-lab/Qwen3.6-35B-A3B-DFlash"
     assert len(stop) > 0
@@ -57,6 +105,8 @@ def test_load_ddtree_runtime_requires_drafter():
 def test_validate_results_payload_accepts_minimal():
     payload = make_results_payload(
         ts="20260524T120000Z",
+        session_id="20260524T120000Z",
+        family_id="3.6-35b-moe",
         method="plain-mlx",
         model_label="test",
         model_ref="org/model",
@@ -64,7 +114,7 @@ def test_validate_results_payload_accepts_minimal():
             {
                 "prompt": CODING_PROMPTS[0][0],
                 **runs_to_result_dict([
-                    RunMetrics(10.0, 5.0, 20, 100.0),
+                    RunMetrics(10.0, 5.0, 20, 100.0, output_token_ids=(1, 2)),
                 ]),
                 "avg_acceptance": None,
             }
@@ -90,7 +140,7 @@ def test_validate_results_payload_rejects_incomplete_prompt_entry():
             }
         ],
     )
-    with pytest.raises(ValueError, match="completion_tokens_runs"):
+    with pytest.raises(ValueError, match="output_token_ids_sample_runs"):
         validate_results_payload({
             **payload,
             "results": [{"prompt": "code-algo", "ttft_ms_runs": [1], "decode_tps_runs": [2]}],

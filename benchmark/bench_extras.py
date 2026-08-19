@@ -28,17 +28,15 @@ from benchmark._lib import (
     run_prompt_suite,
     write_results,
 )
+from benchmark.models import EXTRA_MLX_TARGETS
 
-TARGETS = [
-    ("Qwen3.6-27B-dense  [MLX-int4]", "mlx-community/Qwen3.6-27B-4bit"),
-    ("Qwen3.6-27B-dense  [MLX-OptiQ-4bit]", "mlx-community/Qwen3.6-27B-OptiQ-4bit"),
-]
+SESSION_ID = os.environ.get("BENCH_SESSION_ID")
 
 from mlx_lm import load
 
 cooldown(PRE_BENCH_COOLDOWN_S, "pre-bench: let chip cool before extras")
 
-for target_idx, (label, model_ref) in enumerate(TARGETS):
+for target_idx, (label, model_ref) in enumerate(EXTRA_MLX_TARGETS):
     if target_idx > 0:
         cooldown(INTER_CONFIG_COOLDOWN_S, "between extras targets")
 
@@ -60,6 +58,7 @@ for target_idx, (label, model_ref) in enumerate(TARGETS):
 
     payload = make_results_payload(
         ts=get_timestamp_iso8601(),
+        session_id=SESSION_ID,
         method="plain-mlx",
         model_label=label,
         model_ref=model_ref,

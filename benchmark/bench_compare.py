@@ -2,8 +2,8 @@
 """
 Benchmark: Ollama models vs plain mlx_lm vs DFlash+DDTree.
 
-Multi-prompt coding run (code-algo, code-async, code-cache).
-Memory safety: Ollama models are unloaded before MLX is loaded.
+Prefer `benchmark.bench_session` for fair single-session comparisons.
+This script remains for partial re-runs (BENCH_PHASE=ollama|mlx|all).
 
 Usage:
     HF_HOME=~/Models/HuggingFace .venv/bin/python -m benchmark.bench_compare
@@ -17,12 +17,10 @@ os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark._lib import (
     CODING_PROMPTS,
-    DEFAULT_DRAFT_BY_TARGET,
     DEFAULT_SAMPLING,
     DEFAULT_TREE_BUDGET,
     INTER_CONFIG_COOLDOWN_S,
     INTER_PROMPT_COOLDOWN_S,
-    INTER_RUN_COOLDOWN_S,
     POST_BENCH_COOLDOWN_S,
     PRE_BENCH_COOLDOWN_S,
     PROMPT_SET,
@@ -35,34 +33,25 @@ from benchmark._lib import (
     ensure_ollama_model,
     get_timestamp_iso8601,
     load_ddtree_runtime,
+    load_mlx_target,
     make_results_payload,
     ollama_unload,
+    resolve_draft_ref,
     run_prompt_suite,
     wait_for_ollama_server,
     write_results,
 )
+from benchmark.models import MODEL_FAMILIES, family_label
 
 BENCH_PHASE = os.environ.get("BENCH_PHASE", "all").lower()
 assert BENCH_PHASE in ("all", "ollama", "mlx"), f"BENCH_PHASE must be all|ollama|mlx (got {BENCH_PHASE!r})"
 RUN_OLLAMA = BENCH_PHASE in ("all", "ollama")
 RUN_MLX = BENCH_PHASE in ("all", "mlx")
+SESSION_ID = os.environ.get("BENCH_SESSION_ID")
 
-OLLAMA_MODELS = [
-    ("Qwen3.6-27B-dense  [GGUF-Q4_K_M]", "qwen3.6:27b"),
-    ("Qwen3.6-35B-MoE    [GGUF-Q4_K_M]", "qwen3.6:35b"),
-    # qwen3.6-uncensored:35b-q4 omitted — tag not in Ollama library (pull 404)
-]
-
-MLX_MODELS = [
-    (
-        "Qwen3.6-35B-MoE    [MLX-int4-DWQ]",
-        "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ",
-        DEFAULT_DRAFT_BY_TARGET["mlx-community/Qwen3.6-35B-A3B-4bit-DWQ"],
-    ),
-]
-
+# MoE family only (legacy compare scope).
+_COMPARE_FAMILY = next(f for f in MODEL_FAMILIES if f.id == "3.6-35b-moe")
 TREE_BUDGET = DEFAULT_TREE_BUDGET
-loaded_draft_ref: str | None = None
 
 
 def ensure_ollama_server() -> None:
@@ -106,18 +95,19 @@ def run_ddtree_suite(label, target, tok, draft, stop, prompt_text):
 def write_method_results(
     ts: str,
     method: str,
-    label: str,
-    model_ref: str,
     results_dict: dict,
     *,
     drafter_ref: str | None = None,
     tree_budget: int | None = None,
 ):
+    family = _COMPARE_FAMILY
     payload = make_results_payload(
         ts=ts,
+        session_id=SESSION_ID,
+        family_id=family.id,
         method=method,
-        model_label=label,
-        model_ref=model_ref,
+        model_label=family_label(family),
+        model_ref=family.mlx_ref if method != "ollama" else family.ollama_ref,
         drafter_ref=drafter_ref,
         tree_budget=tree_budget,
         results=[
@@ -130,13 +120,14 @@ def write_method_results(
         prompt_set=PROMPT_SET,
     )
     path = write_results(payload)
-    print(f"Wrote {method} {label} results to {path}", flush=True)
+    print(f"Wrote {method} results to {path}", flush=True)
 
 
 results_by_method_model: dict = {}
 ts = get_timestamp_iso8601()
+family = _COMPARE_FAMILY
 
-if RUN_OLLAMA:
+if RUN_OLLAMA and family.ollama_ref:
     print("=" * 70, flush=True)
     print("  PHASE 1: Ollama models (/api/chat, think=false)", flush=True)
     print("=" * 70, flush=True)
@@ -144,54 +135,64 @@ if RUN_OLLAMA:
     ensure_ollama_server()
     cooldown(PRE_BENCH_COOLDOWN_S, "pre-bench: let chip cool before Ollama phase")
 
-    for label, ollama_model in OLLAMA_MODELS:
-        print(f"\nBenchmarking Ollama {label}", flush=True)
-        ensure_ollama_model(ollama_model)
-        cooldown(INTER_CONFIG_COOLDOWN_S, "between configs: thermal reset before new model")
+    ollama_model = family.ollama_ref
+    label = family_label(family)
+    print(f"\nBenchmarking Ollama {label}", flush=True)
+    ensure_ollama_model(ollama_model)
+    cooldown(INTER_CONFIG_COOLDOWN_S, "between configs: thermal reset before new model")
 
-        results_this_model = {}
-        for prompt_name, prompt_text in CODING_PROMPTS:
-            suite = run_prompt_suite(
-                f"Ollama {label} [{prompt_name}]",
-                bench_fn=lambda pt=prompt_text: bench_ollama_chat(ollama_model, pt),
-                warmup_fn=lambda wp, m=ollama_model: bench_ollama_chat(m, wp),
-            )
-            results_this_model[prompt_name] = {"avg_acceptance": None, **suite}
-            cooldown(INTER_PROMPT_COOLDOWN_S, f"between prompts of ollama/{label}")
+    results_this_model = {}
+    for prompt_name, prompt_text in CODING_PROMPTS:
+        suite = run_prompt_suite(
+            f"Ollama {label} [{prompt_name}]",
+            bench_fn=lambda pt=prompt_text: bench_ollama_chat(ollama_model, pt),
+            warmup_fn=lambda wp, m=ollama_model: bench_ollama_chat(m, wp),
+        )
+        results_this_model[prompt_name] = {"avg_acceptance": None, **suite}
+        cooldown(INTER_PROMPT_COOLDOWN_S, f"between prompts of ollama/{label}")
 
-        results_by_method_model[("ollama", label, ollama_model)] = results_this_model
-        write_method_results(ts, "ollama", label, ollama_model, results_this_model)
+    results_by_method_model[("ollama", label, ollama_model)] = results_this_model
+    write_method_results(ts, "ollama", results_this_model)
 
-        print(f"\nUnloading {ollama_model}...", end=" ", flush=True)
-        ollama_unload(ollama_model)
-        print("done", flush=True)
+    print(f"\nUnloading {ollama_model}...", end=" ", flush=True)
+    ollama_unload(ollama_model)
+    print("done", flush=True)
 
-if RUN_MLX:
+if RUN_MLX and family.mlx_ref:
     print(f"\n{'='*70}", flush=True)
-    print("  PHASE 2: MLX models (loaded one at a time)", flush=True)
+    print("  PHASE 2: MLX models (plain target only, then target+drafter)", flush=True)
     print(f"{'='*70}", flush=True)
 
     cooldown(INTER_CONFIG_COOLDOWN_S, "before MLX phase: reset after Ollama")
 
-    for label, mlx_ref, explicit_draft in MLX_MODELS:
-        print(f"\nLoading {mlx_ref} + drafter {explicit_draft}...", flush=True)
-        target, tok, draft, loaded_draft_ref, stop = load_ddtree_runtime(
-            mlx_ref, explicit_draft
+    mlx_ref = family.mlx_ref
+    label = family_label(family)
+    draft_ref = family.draft_ref or resolve_draft_ref(mlx_ref)
+
+    print(f"\nLoading plain MLX target {mlx_ref}...", flush=True)
+    target, tok = load_mlx_target(mlx_ref)
+
+    results_plain = {}
+    for prompt_name, prompt_text in CODING_PROMPTS:
+        suite = run_prompt_suite(
+            f"Plain mlx_lm {label} [{prompt_name}]",
+            bench_fn=lambda pt=prompt_text: bench_mlx_plain(target, tok, pt),
+            warmup_fn=lambda wp: bench_mlx_plain(target, tok, wp),
         )
+        results_plain[prompt_name] = {"avg_acceptance": None, **suite}
+        cooldown(INTER_PROMPT_COOLDOWN_S, f"between prompts of plain-mlx/{label}")
+
+    results_by_method_model[("plain-mlx", label, mlx_ref)] = results_plain
+    write_method_results(ts, "plain-mlx", results_plain)
+
+    del target, tok
+    gc.collect()
+    cooldown(INTER_CONFIG_COOLDOWN_S, "unload plain target before DDTree load")
+
+    if draft_ref:
+        print(f"\nLoading {mlx_ref} + drafter {draft_ref}...", flush=True)
+        target, tok, draft, loaded_draft_ref, stop = load_ddtree_runtime(mlx_ref, draft_ref)
         print(f"Loaded drafter: {loaded_draft_ref}", flush=True)
-
-        results_plain = {}
-        for prompt_name, prompt_text in CODING_PROMPTS:
-            suite = run_prompt_suite(
-                f"Plain mlx_lm {label} [{prompt_name}]",
-                bench_fn=lambda pt=prompt_text: bench_mlx_plain(target, tok, pt),
-                warmup_fn=lambda wp: bench_mlx_plain(target, tok, wp),
-            )
-            results_plain[prompt_name] = {"avg_acceptance": None, **suite}
-            cooldown(INTER_PROMPT_COOLDOWN_S, f"between prompts of plain-mlx/{label}")
-
-        results_by_method_model[("plain-mlx", label, mlx_ref)] = results_plain
-        write_method_results(ts, "plain-mlx", label, mlx_ref, results_plain)
 
         results_ddtree = {}
         for prompt_name, prompt_text in CODING_PROMPTS:
@@ -206,8 +207,6 @@ if RUN_MLX:
         write_method_results(
             ts,
             "ddtree-mlx",
-            label,
-            mlx_ref,
             results_ddtree,
             drafter_ref=loaded_draft_ref,
             tree_budget=TREE_BUDGET,
@@ -220,7 +219,7 @@ cooldown(POST_BENCH_COOLDOWN_S, "post-bench: final cooldown")
 
 print(f"\n\n{'='*70}")
 print(f"  COMPARISON SUMMARY")
-print(f"  {WARMUPS} warmups · {RUNS_PER_PROMPT} runs/prompt · {INTER_RUN_COOLDOWN_S}s between runs")
+print(f"  {WARMUPS} warmups · {RUNS_PER_PROMPT} runs/prompt")
 print(f"{'='*70}")
 
 for (method, label, _), results_dict in sorted(results_by_method_model.items()):

@@ -14,7 +14,7 @@ if ! curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
 fi
 
 echo "[$(date -u +%FT%TZ)] pulling Ollama models (skip if cached)..."
-for m in qwen3.6:27b qwen3.6:35b; do
+for m in qwen3.6:35b qwen3.8:27b-q4_K_M qwen3.6:27b; do
   echo "[$(date -u +%FT%TZ)] ollama pull $m"
   ollama pull "$m" || exit 1
 done

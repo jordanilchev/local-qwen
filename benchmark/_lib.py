@@ -3,11 +3,12 @@
 Shared utilities for benchmark scripts: prompts, cooldown, JSON output, timing helpers.
 Fanless M4 MacBook Air requires strict thermal discipline.
 
-Timing convention (all HTTP / Python-stream backends):
-  TTFT   = wall time from request/call start to first generated token (or first stream chunk)
-  Decode = (completion_tokens - 1) / wall time after first token
+Timing convention (all backends):
+  TTFT   = wall time from request/call start to first generated token (or prefill end for batch paths)
+  Decode = (completion_tokens - 1) / wall time after TTFT
 
-DDTree uses internal prefill_us for TTFT (no streaming hook); total_ms is wall clock for the call.
+DDTree has no streaming hook; TTFT is wall-clock proportional to internal prefill_us / elapsed_us.
+Internal prefill_us is stored separately as ttft_prefill_us_ms for diagnostics.
 """
 from __future__ import annotations
 
@@ -31,6 +32,8 @@ INTER_RUN_COOLDOWN_S = 60
 INTER_PROMPT_COOLDOWN_S = 60
 INTER_CONFIG_COOLDOWN_S = 90
 POST_BENCH_COOLDOWN_S = 60
+THERMAL_LOAD_MAX = 1.5
+THERMAL_MAX_WAIT_S = 600
 
 WARMUPS = 2
 RUNS_PER_PROMPT = 5
@@ -85,9 +88,12 @@ CODING_PROMPTS = [
     ("code-cache", PROMPT_CODE_CACHE),
 ]
 
-# Qwen3.6 drafters are not in dflash_mlx 0.1.0's DRAFT_REGISTRY yet.
+# Targets with official MLX DFlash drafters (dflash_mlx registry + local fallback).
 DEFAULT_DRAFT_BY_TARGET: dict[str, str] = {
     "mlx-community/Qwen3.6-35B-A3B-4bit-DWQ": "z-lab/Qwen3.6-35B-A3B-DFlash",
+    "mlx-community/Qwen3.6-27B-4bit": "z-lab/Qwen3.6-27B-DFlash",
+    "mlx-community/Qwen3.5-27B-4bit": "z-lab/Qwen3.5-27B-DFlash",
+    "mlx-community/Qwen3.8-27B-4bit": "z-lab/Qwen3.8-27B-DFlash2",
 }
 
 # Warmup prompts differ from timed prompts so prefix-cache priming does not skew TTFT.
@@ -98,12 +104,17 @@ WARMUP_PROMPTS = [
 ]
 
 
+OUTPUT_TOKEN_SAMPLE = 32
+
+
 @dataclass(frozen=True)
 class RunMetrics:
     ttft_ms: float
     decode_tps: float
     completion_tokens: int
     total_ms: float
+    ttft_prefill_us_ms: float | None = None
+    output_token_ids: tuple[int, ...] = ()
 
 
 # ── Chat formatting ────────────────────────────────────────────────────────────
@@ -151,7 +162,23 @@ def load_ddtree_runtime(model_ref: str, draft_ref: Optional[str] = None):
     """Load target + drafter for DDTree; fail fast if the drafter cannot be loaded."""
     from dflash_mlx.generate import get_stop_token_ids, load_runtime_components
 
+    from benchmark.dflash2 import is_dflash2_ref, load_dflash2_draft
+
     resolved = resolve_draft_ref(model_ref, draft_ref)
+    if not resolved:
+        raise RuntimeError(
+            f"DDTree requires a drafter but none is registered for target {model_ref!r}. "
+            f"Set DRAFT= explicitly or add benchmark._lib.DEFAULT_DRAFT_BY_TARGET[{model_ref!r}]."
+        )
+
+    if is_dflash2_ref(resolved):
+        from mlx_lm import load as mlx_load
+
+        target, tokenizer = mlx_load(model_ref)
+        draft = load_dflash2_draft(resolved)
+        draft.bind(target)
+        return target, tokenizer, draft, resolved, get_stop_token_ids(tokenizer)
+
     target, tokenizer, draft, loaded_ref = load_runtime_components(
         model_ref=model_ref,
         draft_ref=resolved,
@@ -159,13 +186,31 @@ def load_ddtree_runtime(model_ref: str, draft_ref: Optional[str] = None):
     if draft is None:
         raise RuntimeError(
             f"DDTree requires a drafter but draft_model is None for target {model_ref!r} "
-            f"(resolved draft ref: {resolved!r}). Set DRAFT= explicitly or add "
-            f"benchmark._lib.DEFAULT_DRAFT_BY_TARGET[{model_ref!r}]."
+            f"(resolved draft ref: {resolved!r}). dflash-mlx returned None "
+            f"(exceptions are swallowed in load_runtime_components)."
         )
     return target, tokenizer, draft, loaded_ref, get_stop_token_ids(tokenizer)
 
 
 # ── Timing helpers ─────────────────────────────────────────────────────────────
+
+def set_benchmark_seed(seed: int | None = None) -> None:
+    """Best-effort deterministic sampling on MLX backends (no seed param in make_sampler)."""
+    import mlx.core as mx
+
+    mx.random.seed(seed if seed is not None else DEFAULT_SAMPLING["seed"])
+
+
+def wall_ttft_from_ddtree_phases(total_ms: float, prefill_us: float, elapsed_us: float) -> float:
+    """Map DDTree internal phase split onto wall clock for fair TTFT vs streaming backends."""
+    if elapsed_us <= 0:
+        return total_ms
+    return total_ms * (prefill_us / elapsed_us)
+
+
+def sample_output_tokens(token_ids: list[int] | tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(token_ids[:OUTPUT_TOKEN_SAMPLE])
+
 
 def decode_tps_from_wallclock(completion_tokens: int, ttft_ms: float, total_ms: float) -> float:
     """Decode tok/s excluding TTFT; returns 0 when fewer than 2 tokens."""
@@ -189,13 +234,48 @@ def runs_to_result_dict(runs: list[RunMetrics], extra: Optional[dict[str, Any]] 
         "decode_tps_median": median_run_field(runs, "decode_tps"),
         "completion_tokens_median": int(median_run_field(runs, "completion_tokens")),
         "total_ms_median": median_run_field(runs, "total_ms"),
+        "output_token_ids_sample_runs": [list(r.output_token_ids) for r in runs],
     }
+    prefill_runs = [r.ttft_prefill_us_ms for r in runs if r.ttft_prefill_us_ms is not None]
+    if prefill_runs:
+        payload["ttft_prefill_us_ms_runs"] = prefill_runs
     if extra:
         payload.update(extra)
     return payload
 
 
 # ── Cooldown + suite runner ────────────────────────────────────────────────────
+
+def _pmset_therm_line() -> str:
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["pmset", "-g", "therm"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        text = (out.stdout or "") + (out.stderr or "")
+        return " ".join(text.split())[:200]
+    except Exception as exc:
+        return f"pmset unavailable ({exc})"
+
+
+def wait_for_thermal_idle(reason: str, *, min_s: int | None = None) -> None:
+    """Sleep until 1-min loadavg is cool enough, after a minimum cooldown (fanless M4)."""
+    floor = INTER_CONFIG_COOLDOWN_S if min_s is None else min_s
+    cooldown(floor, f"thermal floor before {reason}")
+    deadline = time.time() + THERMAL_MAX_WAIT_S
+    while time.time() < deadline:
+        load1, _, _ = os.getloadavg()
+        therm = _pmset_therm_line()
+        print(f"[thermal] load1={load1:.2f} therm={therm!r}", flush=True)
+        if load1 <= THERMAL_LOAD_MAX and "CPU_Speed_Limit" not in therm:
+            return
+        time.sleep(15)
+    print(f"[thermal] max wait {THERMAL_MAX_WAIT_S}s reached; continuing ({reason})", flush=True)
+
 
 def cooldown(seconds: int, reason: str) -> None:
     print(f"[cooldown {seconds}s] {reason}", flush=True)
@@ -241,8 +321,17 @@ def run_prompt_suite(
 
 # ── MLX plain stream_generate ──────────────────────────────────────────────────
 
+def load_mlx_target(model_ref: str):
+    """Load MLX target only (no drafter resident — fair plain-MLX baseline)."""
+    from mlx_lm import load
+
+    return load(model_ref)
+
+
 def make_greedy_sampler() -> Callable:
     from mlx_lm.sample_utils import make_sampler
+
+    set_benchmark_seed()
     return make_sampler(temp=0.0)
 
 
@@ -272,11 +361,24 @@ def bench_ddtree(
     t_end = time.perf_counter()
 
     gen_tokens = int(result["generation_tokens"])
-    ttft_ms = result["prefill_us"] / 1000.0
+    prefill_us = float(result["prefill_us"])
+    elapsed_us = float(result["elapsed_us"])
     total_ms = (t_end - t0) * 1000.0
+    ttft_ms = wall_ttft_from_ddtree_phases(total_ms, prefill_us, elapsed_us)
     decode_tps = decode_tps_from_wallclock(gen_tokens, ttft_ms, total_ms)
     avg_acceptance = float(result.get("avg_acceptance", float("nan")))
-    return RunMetrics(ttft_ms, decode_tps, gen_tokens, total_ms), avg_acceptance
+    out_ids = sample_output_tokens(result.get("generated_token_ids", []))
+    return (
+        RunMetrics(
+            ttft_ms,
+            decode_tps,
+            gen_tokens,
+            total_ms,
+            ttft_prefill_us_ms=prefill_us / 1000.0,
+            output_token_ids=out_ids,
+        ),
+        avg_acceptance,
+    )
 
 
 def bench_vllm_engine(
@@ -286,6 +388,7 @@ def bench_vllm_engine(
     from vllm_mlx import Request, SamplingParams
     from vllm_mlx.mlx_streams import bind_generation_streams
 
+    set_benchmark_seed()
     sp = SamplingParams(temperature=0.0, max_tokens=max_tokens, top_p=1.0, top_k=0)
     prompt_str = apply_chat_prompt(tokenizer, prompt_text)
     rid = str(uuid.uuid4())
@@ -312,12 +415,12 @@ def bench_vllm_engine(
 
     t_end = time.perf_counter()
     if t_first is None:
-        return RunMetrics(0.0, 0.0, count, (t_end - t0) * 1000.0)
+        return RunMetrics(0.0, 0.0, count, (t_end - t0) * 1000.0, output_token_ids=())
 
     ttft_ms = (t_first - t0) * 1000.0
     total_ms = (t_end - t0) * 1000.0
     decode_tps = decode_tps_from_wallclock(count, ttft_ms, total_ms)
-    return RunMetrics(ttft_ms, decode_tps, count, total_ms)
+    return RunMetrics(ttft_ms, decode_tps, count, total_ms, output_token_ids=())
 
 
 def bench_mlx_plain(model, tokenizer, prompt_text: str, max_tokens: int = MAX_TOKENS) -> RunMetrics:
@@ -329,21 +432,91 @@ def bench_mlx_plain(model, tokenizer, prompt_text: str, max_tokens: int = MAX_TO
     t0 = time.perf_counter()
     t_first: float | None = None
     count = 0
-    for _ in stream_generate(
+    token_ids: list[int] = []
+    for response in stream_generate(
         model, tokenizer, prompt=prompt_str, max_tokens=max_tokens, sampler=sampler
     ):
         if t_first is None:
             t_first = time.perf_counter()
         count += 1
+        token_ids.append(int(response.token))
 
     t_end = time.perf_counter()
     if t_first is None:
-        return RunMetrics(0.0, 0.0, 0, (t_end - t0) * 1000.0)
+        return RunMetrics(0.0, 0.0, 0, (t_end - t0) * 1000.0, output_token_ids=())
 
     ttft_ms = (t_first - t0) * 1000.0
     total_ms = (t_end - t0) * 1000.0
     decode_tps = decode_tps_from_wallclock(count, ttft_ms, total_ms)
-    return RunMetrics(ttft_ms, decode_tps, count, total_ms)
+    return RunMetrics(
+        ttft_ms,
+        decode_tps,
+        count,
+        total_ms,
+        output_token_ids=sample_output_tokens(token_ids),
+    )
+
+
+def bench_dflash2_mlx(
+    model,
+    tokenizer,
+    draft,
+    prompt_text: str,
+    *,
+    block_size: int,
+    max_tokens: int = MAX_TOKENS,
+) -> tuple[RunMetrics, float]:
+    """Official DFlash2 linear+selector path (`dflash.model_mlx.stream_generate`)."""
+    from dflash.model_mlx import stream_generate
+
+    set_benchmark_seed()
+    prompt_str = apply_chat_prompt(tokenizer, prompt_text)
+
+    t0 = time.perf_counter()
+    t_first: float | None = None
+    token_ids: list[int] = []
+    accepted_chunks: list[float] = []
+    for response in stream_generate(
+        model,
+        draft,
+        tokenizer,
+        prompt_str,
+        block_size=block_size,
+        max_tokens=max_tokens,
+        temperature=0.0,
+    ):
+        if not response.tokens:
+            continue
+        if t_first is None:
+            t_first = time.perf_counter()
+        token_ids.extend(int(t) for t in response.tokens)
+        if response.accepted is not None:
+            accepted_chunks.append(float(response.accepted))
+
+    t_end = time.perf_counter()
+    count = len(token_ids)
+    if t_first is None:
+        return (
+            RunMetrics(0.0, 0.0, 0, (t_end - t0) * 1000.0, output_token_ids=()),
+            float("nan"),
+        )
+
+    ttft_ms = (t_first - t0) * 1000.0
+    total_ms = (t_end - t0) * 1000.0
+    decode_tps = decode_tps_from_wallclock(count, ttft_ms, total_ms)
+    avg_acceptance = (
+        statistics.mean(accepted_chunks) if accepted_chunks else float("nan")
+    )
+    return (
+        RunMetrics(
+            ttft_ms,
+            decode_tps,
+            count,
+            total_ms,
+            output_token_ids=sample_output_tokens(token_ids),
+        ),
+        avg_acceptance,
+    )
 
 
 # ── Ollama chat streaming ──────────────────────────────────────────────────────
@@ -453,13 +626,13 @@ def bench_ollama_chat(model: str, prompt_text: str, max_tokens: int = MAX_TOKENS
 
     t_end = time.perf_counter()
     if t_first is None:
-        return RunMetrics(0.0, 0.0, eval_count, (t_end - t0) * 1000.0)
+        return RunMetrics(0.0, 0.0, eval_count, (t_end - t0) * 1000.0, output_token_ids=())
 
     ttft_ms = (t_first - t0) * 1000.0
     total_ms = (t_end - t0) * 1000.0
     tokens = eval_count if eval_count > 0 else 1
     decode_tps = decode_tps_from_wallclock(tokens, ttft_ms, total_ms)
-    return RunMetrics(ttft_ms, decode_tps, tokens, total_ms)
+    return RunMetrics(ttft_ms, decode_tps, tokens, total_ms, output_token_ids=())
 
 
 def ollama_unload(model: str) -> None:
@@ -483,8 +656,13 @@ REQUIRED_RESULT_KEYS = {
     "warmups", "runs_per_prompt", "prompt_set", "results",
 }
 REQUIRED_PROMPT_RESULT_KEYS = {
-    "prompt", "ttft_ms_runs", "decode_tps_runs", "completion_tokens_runs",
-    "ttft_ms_median", "decode_tps_median",
+    "prompt",
+    "ttft_ms_runs",
+    "decode_tps_runs",
+    "completion_tokens_runs",
+    "ttft_ms_median",
+    "decode_tps_median",
+    "output_token_ids_sample_runs",
 }
 
 
@@ -522,6 +700,31 @@ def get_timestamp_iso8601() -> str:
     return now.strftime("%Y%m%dT%H%M%SZ")
 
 
+def check_output_token_parity(
+    reference: tuple[int, ...],
+    candidate: tuple[int, ...],
+    *,
+    method: str,
+    prompt: str,
+) -> dict[str, Any]:
+    """Compare first-token samples; greedy backends should match when quant-compatible."""
+    if not reference or not candidate:
+        return {"parity_checked": False, "parity_match": None, "parity_method": method}
+    n = min(len(reference), len(candidate))
+    match = reference[:n] == candidate[:n]
+    if not match:
+        print(
+            f"[parity] {method} [{prompt}] first {n} tokens differ from plain-mlx reference",
+            flush=True,
+        )
+    return {
+        "parity_checked": True,
+        "parity_match": match,
+        "parity_method": method,
+        "parity_compared_tokens": n,
+    }
+
+
 def make_results_payload(
     *,
     ts: str,
@@ -535,10 +738,14 @@ def make_results_payload(
     warmups: int = WARMUPS,
     runs_per_prompt: int = RUNS_PER_PROMPT,
     prompt_set: str = PROMPT_SET,
+    session_id: Optional[str] = None,
+    family_id: Optional[str] = None,
     extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ts": ts,
+        "session_id": session_id,
+        "family_id": family_id,
         "host": HOST,
         "method": method,
         "model_label": model_label,

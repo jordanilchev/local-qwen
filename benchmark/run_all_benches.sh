@@ -1,97 +1,117 @@
 #!/usr/bin/env bash
-# Run every benchmark sequentially against the currently-available models.
-# Each bench runs in a fresh Python process (clean RAM/Metal context). Cooldowns
-# between benches give the fanless M4 time to recover thermally.
+# Unified fair benchmark: MLX-first sessions per model family, single session_id.
 #
-# Order is light → heavy to fail fast on environment issues:
-#   1. bench_llamacpp_mtp.py     llama.cpp baseline vs MTP
-#   2. bench_extras.py           plain-MLX on Qwen3.6-27B + Qwen3.6-27B-OptiQ
-#   3. bench_ddtree.py           DDTree on Qwen3.6-35B-A3B-4bit-DWQ
-#   4. bench_vllm.py             vllm-mlx on Qwen3.6-27B + Qwen3.6-35B-A3B
-#   5. bench_compare.py          Ollama (3 models) + MLX/DDTree on 35B MoE
+# Order per family (bench_session.py):
+#   plain-mlx → vllm-mlx → ddtree-mlx → ollama → llama.cpp [→ llama.cpp MTP]
 #
-# Per-bench logs: /tmp/run_all_benches_<bench>_<run_id>.log
-# Status JSON:    /tmp/run_all_benches_status.json
+# Families (MLX-heavy first): 3.6-35b-moe → 3.8-27b → 3.6-27b
+# Then optional plain-MLX extras (OptiQ).
 #
 # Usage: ./benchmark/run_all_benches.sh
 set -u
 cd "$(dirname "$0")/.."
 
-RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+RUN_ID="${BENCH_SESSION_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 LOG_DIR="/tmp"
 STATUS_FILE="$LOG_DIR/run_all_benches_status.json"
-INTER_BENCH_COOL_S=120
+INTER_FAMILY_COOL_S=180
+FAMILY_TRIES=3
 
-BENCHES=(
-  "llamacpp_mtp:benchmark.bench_llamacpp_mtp"
-  "extras:benchmark.bench_extras"
-  "ddtree:benchmark.bench_ddtree"
-  "vllm:benchmark.bench_vllm"
-  "compare:benchmark.bench_compare"
-)
+FAMILIES=(3.6-35b-moe 3.8-27b 3.6-27b)
 
-# Ensure Ollama is running for bench_compare; harmless if already running.
 ensure_ollama() {
   if ! curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     echo "[$(date -u +%FT%TZ)] starting ollama serve in background"
-    nohup ollama serve >/tmp/ollama_serve_$RUN_ID.log 2>&1 &
+    nohup ollama serve >"$LOG_DIR/ollama_serve_$RUN_ID.log" 2>&1 &
     sleep 5
   fi
 }
 
-# Stop Ollama before non-Ollama benches to free RAM for MLX.
 stop_ollama() {
-  pkill -f 'ollama serve' 2>/dev/null
+  pkill -f 'ollama serve' 2>/dev/null || true
   sleep 3
 }
 
 declare -a STATUSES
 
-echo "[$(date -u +%FT%TZ)] run_all_benches start (run_id=$RUN_ID)"
+echo "[$(date -u +%FT%TZ)] run_all_benches start (session_id=$RUN_ID)"
 
-for i in "${!BENCHES[@]}"; do
-  spec="${BENCHES[$i]}"
-  name="${spec%%:*}"
-  module="${spec#*:}"
-  log="$LOG_DIR/run_all_benches_${name}_${RUN_ID}.log"
+# Pull Ollama models up front (fail fast).
+ensure_ollama
+for tag in qwen3.6:35b qwen3.8:27b-q4_K_M qwen3.6:27b; do
+  echo "[$(date -u +%FT%TZ)] ollama pull $tag"
+  ollama pull "$tag" || exit 1
+done
+stop_ollama
+
+for i in "${!FAMILIES[@]}"; do
+  family="${FAMILIES[$i]}"
+  log="$LOG_DIR/run_all_benches_${family}_${RUN_ID}.log"
 
   if [ "$i" -gt 0 ]; then
-    echo "[$(date -u +%FT%TZ)] cooldown ${INTER_BENCH_COOL_S}s before next bench"
-    sleep $INTER_BENCH_COOL_S
+    echo "[$(date -u +%FT%TZ)] cooldown ${INTER_FAMILY_COOL_S}s before $family"
+    sleep "$INTER_FAMILY_COOL_S"
   fi
 
-  case "$name" in
-    compare) ensure_ollama ;;
-    *)       stop_ollama ;;
-  esac
-
-  echo "[$(date -u +%FT%TZ)] >>> $name → log $log"
+  ensure_ollama
+  echo "[$(date -u +%FT%TZ)] >>> session family=$family session_id=$RUN_ID → $log"
   t0=$(date +%s)
-  HF_HOME="${HF_HOME:-$HOME/Models/HuggingFace}" \
-    .venv/bin/python -u -m "$module" >"$log" 2>&1
-  rc=$?
+  rc=1
+  for try in $(seq 1 "$FAMILY_TRIES"); do
+    echo "[$(date -u +%FT%TZ)] family $family attempt $try/$FAMILY_TRIES"
+    BENCH_FAMILY="$family" BENCH_SESSION_ID="$RUN_ID" \
+      HF_HOME="${HF_HOME:-$HOME/Models/HuggingFace}" \
+      .venv/bin/python -u -m benchmark.bench_session >"$log" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      break
+    fi
+    echo "[$(date -u +%FT%TZ)] family $family attempt $try failed rc=$rc"
+    sleep 90
+  done
   t1=$(date +%s)
   dt=$((t1 - t0))
+  stop_ollama
 
   if [ "$rc" -eq 0 ]; then
-    STATUSES+=("\"$name\":{\"status\":\"ok\",\"duration_s\":$dt,\"log\":\"$log\"}")
-    echo "[$(date -u +%FT%TZ)] <<< $name OK in ${dt}s"
+    STATUSES+=("\"$family\":{\"status\":\"ok\",\"duration_s\":$dt,\"log\":\"$log\"}")
+    echo "[$(date -u +%FT%TZ)] <<< $family OK in ${dt}s"
   else
-    STATUSES+=("\"$name\":{\"status\":\"failed\",\"rc\":$rc,\"duration_s\":$dt,\"log\":\"$log\"}")
-    echo "[$(date -u +%FT%TZ)] <<< $name FAILED (rc=$rc) in ${dt}s — continuing"
+    STATUSES+=("\"$family\":{\"status\":\"failed\",\"rc\":$rc,\"duration_s\":$dt,\"log\":\"$log\"}")
+    echo "[$(date -u +%FT%TZ)] <<< $family FAILED (rc=$rc) in ${dt}s — continuing"
   fi
 done
 
-# Write final status JSON
+# Optional OptiQ extra (plain-MLX only, no cross-backend row).
+extras_log="$LOG_DIR/run_all_benches_extras_${RUN_ID}.log"
+echo "[$(date -u +%FT%TZ)] >>> extras (OptiQ) → $extras_log"
+t0=$(date +%s)
+BENCH_SESSION_ID="$RUN_ID" HF_HOME="${HF_HOME:-$HOME/Models/HuggingFace}" \
+  .venv/bin/python -u -m benchmark.bench_extras >"$extras_log" 2>&1
+rc=$?
+t1=$(date +%s)
+if [ "$rc" -eq 0 ]; then
+  STATUSES+=("\"extras\":{\"status\":\"ok\",\"duration_s\":$((t1 - t0)),\"log\":\"$extras_log\"}")
+else
+  STATUSES+=("\"extras\":{\"status\":\"failed\",\"rc\":$rc,\"duration_s\":$((t1 - t0)),\"log\":\"$extras_log\"}")
+fi
+
+summary_log="$LOG_DIR/run_all_benches_summary_${RUN_ID}.log"
+BENCH_SESSION_ID="$RUN_ID" .venv/bin/python -m benchmark.summarize --session-id "$RUN_ID" \
+  >"$summary_log" 2>&1 || true
+
 {
   echo "{"
-  echo "  \"run_id\":\"$RUN_ID\","
+  echo "  \"session_id\":\"$RUN_ID\","
   echo "  \"completed_at\":\"$(date -u +%FT%TZ)\","
+  echo "  \"summary_log\":\"$summary_log\","
   echo "  \"results\":{"
   echo "    $(IFS=,; echo "${STATUSES[*]}")"
   echo "  }"
   echo "}"
 } > "$STATUS_FILE"
 
-echo "[$(date -u +%FT%TZ)] all done. status -> $STATUS_FILE"
+echo "[$(date -u +%FT%TZ)] all done. status → $STATUS_FILE"
 cat "$STATUS_FILE"
+echo ""
+echo "Summary table → $summary_log"
