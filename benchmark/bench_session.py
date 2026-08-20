@@ -472,15 +472,23 @@ def _run_llamacpp_config(
         return
 
     label = f"{family.label} [{family.gguf_quant}]"
+    local_model = os.environ.get("LLAMACPP_MODEL", "").strip()
     cmd = [
         str(LLAMACPP_SERVER),
-        "-hf", model_hf,
         "--host", "127.0.0.1", "--port", str(LLAMACPP_PORT),
         "--ctx-size", "8192",
         "-ngl", "99",
         "-fa", "on",
         "-np", "1",
     ]
+    if local_model:
+        cmd += ["--model", local_model]
+        mmproj = os.environ.get("LLAMACPP_MMPROJ", "").strip()
+        if mmproj:
+            cmd += ["--mmproj", mmproj]
+        print(f"Using local GGUF: {local_model}", flush=True)
+    else:
+        cmd[1:1] = ["-hf", model_hf]
     if mtp:
         cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", str(MTP_DRAFT_N_MAX)]
 

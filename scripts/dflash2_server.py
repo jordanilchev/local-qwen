@@ -32,11 +32,17 @@ if str(_ROOT) not in sys.path:
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from benchmark._lib import CHAT_TEMPLATE_KWARGS, set_benchmark_seed
-from benchmark.dflash2 import DEFAULT_DFLASH2_DRAFT_BITS, load_dflash2_mlx_runtime
+from benchmark.dflash2 import (
+    DEFAULT_DFLASH2_DRAFT_BITS,
+    DEFAULT_MAX_CONTEXT,
+    DEFAULT_MAX_NEW_TOKENS,
+    load_dflash2_mlx_runtime,
+    require_context_fits,
+)
 
 DEFAULT_MODEL_ID = "qwen3.8-27b-dflash2"
 DEFAULT_TARGET = "mlx-community/Qwen3.8-27B-4bit"
@@ -138,6 +144,8 @@ async def health():
         "target": STATE.get("target_ref"),
         "draft": STATE.get("draft_ref"),
         "block_size": STATE.get("block_size"),
+        "max_context": STATE.get("max_context"),
+        "default_max_tokens": STATE.get("default_max_tokens"),
     }
 
 
@@ -162,7 +170,9 @@ async def chat_completions(request: Request):
 
     payload = await request.json()
     messages = payload.get("messages", [])
-    max_tokens = int(payload.get("max_tokens", 2048))
+    max_context = int(STATE["max_context"])
+    default_max_tokens = int(STATE["default_max_tokens"])
+    max_tokens = int(payload.get("max_tokens", default_max_tokens))
     stream = bool(payload.get("stream", False))
     temperature = float(payload.get("temperature", 0.0))
 
@@ -174,6 +184,18 @@ async def chat_completions(request: Request):
 
     prompt_str = _messages_to_prompt(tokenizer, messages)
     prompt_tokens = len(tokenizer.encode(prompt_str))
+    try:
+        require_context_fits(prompt_tokens)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if prompt_tokens > max_context:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Prompt is {prompt_tokens:,} tokens; max_context is {max_context:,}. "
+                "Shorten the conversation or raise MAX_CONTEXT."
+            ),
+        )
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
 
@@ -260,6 +282,16 @@ def main() -> None:
     parser.add_argument("--draft", default=DEFAULT_DRAFT)
     parser.add_argument("--draft-bits", type=int, default=DEFAULT_DFLASH2_DRAFT_BITS)
     parser.add_argument("--block-size", type=int, default=None)
+    parser.add_argument(
+        "--max-context",
+        type=int,
+        default=int(os.environ.get("MAX_CONTEXT", DEFAULT_MAX_CONTEXT)),
+    )
+    parser.add_argument(
+        "--default-max-tokens",
+        type=int,
+        default=int(os.environ.get("DEFAULT_MAX_TOKENS", DEFAULT_MAX_NEW_TOKENS)),
+    )
     args = parser.parse_args()
 
     print(f"Loading {args.target} + DFlash2 draft {args.draft}...", flush=True)
@@ -278,6 +310,10 @@ def main() -> None:
             "tokenizer": tokenizer,
             "draft": draft,
             "block_size": block_size,
+            "max_context": max(
+                1, min(int(args.max_context), DEFAULT_MAX_CONTEXT)
+            ),
+            "default_max_tokens": max(1, int(args.default_max_tokens)),
         }
     )
 
@@ -285,6 +321,8 @@ def main() -> None:
     print(f"  Target: {args.target}", flush=True)
     print(f"  Draft:  {args.draft} ({args.draft_bits}-bit)", flush=True)
     print(f"  block_size: {block_size}", flush=True)
+    print(f"  max_context: {STATE['max_context']:,}", flush=True)
+    print(f"  default_max_tokens: {STATE['default_max_tokens']:,}", flush=True)
     print(f"  Models:  http://{args.host}:{args.port}/v1/models", flush=True)
     print(f"  Chat:    http://{args.host}:{args.port}/v1/chat/completions", flush=True)
     uvicorn.run(app, host=args.host, port=args.port)

@@ -30,21 +30,22 @@ Summarize: `.venv/bin/python -m benchmark.summarize --session-id 20260819T044632
 | 🥇 Ollama | NVFP4 (`qwen3.8:27b-mlx`)† | **17.2** | 527 | 1.00× | `qwen3.8:27b-mlx` (same digest as `27b-nvfp4`) |
 | Plain MLX | MLX-int4 | 6.6 | 1658 | 0.39× | [mlx-community/Qwen3.8-27B-4bit](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit) |
 | vllm-mlx | MLX-int4 | 6.6 | 1621 | 0.38× | same weights |
-| llama.cpp | GGUF-Q4_K_XL | 4.4 | 1887 | 0.26× | [unsloth/Qwen3.8-27B-GGUF](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) |
+| llama.cpp | Unsloth UD-Q4_K_XL | 4.4 | 1887 | 0.26× | [unsloth/Qwen3.8-27B-GGUF](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF); re-bench 4.1 in `162554Z` |
 | DDTree | DFlash2 | — | — | skipped | [z-lab/Qwen3.8-27B-DFlash2](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) downloaded; `ddtree-mlx` returned `draft_model=None` |
 
 Token parity vs plain-mlx: ✓ for MLX/vllm/llama.cpp. † Session `20260819T044632Z` used Ollama `27b-mlx`, which is **NVFP4**, not mlx-community int4 and not GGUF Q4.
 
-#### Fair 4-bit + official DFlash2 — session `20260819T192413Z`
+#### Fair 4-bit — DFlash2 / Ollama Q4 / Unsloth GGUF
 
-`dflash generate mlx` path (`dflash.model_mlx.stream_generate`, `--draft-bits 4`, `block_size` capped at 5 for int4 matmul). Same `session_id` for both rows. Do not mix with the NVFP4 Ollama row above.
+Do not mix with the NVFP4 Ollama row above. DFlash2 + Ollama Q4 share session `20260819T192413Z`. Unsloth llama.cpp is session `20260820T162554Z` (local `UD-Q4_K_XL`, `--ctx-size 8192`; different thermal window).
 
 | Method | Quant | Avg tok/s | TTFT (ms) | vs Q4 Ollama | Source |
 |--------|-------|----------:|----------:|-------------:|--------|
 | 🥇 DFlash2 MLX | MLX-int4 + draft 4-bit | **16.6** | 1595 | 2.91× | [mlx-community/Qwen3.8-27B-4bit](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit) + [z-lab/Qwen3.8-27B-DFlash2](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) |
 | Ollama | GGUF-Q4_K_M | 5.7 | 755 | 1.00× | `qwen3.8:27b-q4_K_M` (full 27.3B) |
+| llama.cpp (Unsloth) | UD-Q4_K_XL | 4.1 | 2040 | 0.72× | [unsloth/Qwen3.8-27B-GGUF](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) |
 
-Acceptance ~4.2 tokens/block. ~2.5× the 6.6 tok/s plain-MLX baseline from session `044632Z` (different thermal window; same MLX-int4 file). Ollama Q4 is in the same ballpark as 3.6-27B Q4 (5.6). NVFP4 `27b-mlx` (17.2) is a different quant — not this comparison.
+DFlash2 acceptance ~4.2 tokens/block (~2.5× plain MLX 6.6 from session `044632Z`). Unsloth Dynamic GGUF is quality-oriented; on this chip it is slower than Ollama Q4 and far behind DFlash2. **Context cap:** default `MAX_CONTEXT=8192` — 100k tokens ≈ 24 GB KV + ~20 GB weights and jetsams 32 GB UMA.
 
 ### Qwen 3.6 — 35B MoE
 
@@ -94,17 +95,18 @@ No thermal split this session: plain MLX and vllm-mlx held ~6.6 tok/s on all thr
 
 ### Key observations
 
-- **Official DFlash2 is the 3.8 MLX speed path:** 16.6 tok/s (`dflash2-mlx`, session `20260819T192413Z`) vs 5.7 tok/s Ollama Q4_K_M and 6.6 tok/s plain MLX. Ollama cannot load DFlash2; its 17.2 tok/s `27b-mlx` row is **NVFP4**, not int4.
+- **Official DFlash2 is the 3.8 MLX speed path:** 16.6 tok/s (`dflash2-mlx`, session `20260819T192413Z`) vs 5.7 tok/s Ollama Q4_K_M, 4.1 tok/s Unsloth llama.cpp (`162554Z`), and 6.6 tok/s plain MLX. Ollama cannot load DFlash2; its 17.2 tok/s `27b-mlx` row is **NVFP4**, not int4.
 - **Ollama caught up on 35B MoE:** 29.9 tok/s vs MLX 32.8 (MLX +10%). The old “MLX ~2× Ollama” claim was against Ollama 0.21 / mixed sessions.
 - **DDTree wins 3.6-27B dense:** 11.0 vs plain MLX 6.6 (+65%) at ~3.4 accepted tokens/cycle. 35B DDTree did **not** run session `044632Z` (`draft_model=None`). 3.8 uses official DFlash2 (`dflash2-mlx`), not DDTree tree-search, in session `192413Z`.
 - **vllm-mlx matches plain MLX decode** on every family that both ran (35B 32.6 vs 32.8; both 27B dense models 6.6).
-- **llama.cpp MTP is a small bump over its own baseline** (5.3 vs 5.1, ~90% draft accept) and is behind Ollama and MLX on 3.6-27B. No MTP GGUF was benched for 3.8.
+- **llama.cpp MTP is a small bump over its own baseline** (5.3 vs 5.1, ~90% draft accept) and is behind Ollama and MLX on 3.6-27B. 3.8 Unsloth baseline is 4.1 tok/s (no MTP GGUF benched).
 - **OptiQ is no longer a disaster:** 5.6 vs uniform int4 6.6 tok/s (−15%), vs 2.6 tok/s in the May mixed-session tables.
 - **MoE vs dense (plain MLX):** 32.8 tok/s (35B) vs 6.6 tok/s (both 27B dense models) — still ~5× on this chip.
+- **32 GB context limit:** Qwen3.8 KV ≈ 256 KiB/token; 100k tokens ≈ 24 GB KV + ~20 GB DFlash2 weights jetsams the machine. Default `MAX_CONTEXT=8192`.
 
 ### Methodology / caveats
 
-- **Single-session rule:** published comparisons must share the same `session_id` in JSON (set automatically by `run_all_benches.sh`). Cross-family tables are `20260819T044632Z`; the 3.8 DFlash2 vs Q4 Ollama table is `20260819T192413Z`.
+- **Single-session rule:** published comparisons must share the same `session_id` in JSON (set automatically by `run_all_benches.sh`). Cross-family tables are `20260819T044632Z`; 3.8 DFlash2 vs Q4 Ollama is `20260819T192413Z`; Unsloth llama.cpp re-bench is `20260820T162554Z`.
 - All runs on a fanless M4 MacBook Air (32 GB UMA). 60 s between timed runs; 90 s thermal floor between methods; 180 s between families.
 - Software this session: mlx 0.32.1, mlx-lm 0.31.3, Ollama 0.32.14, vllm-mlx 0.2.9. Older pins and May 2025 mixed-session JSONs live in [`benchmark/ENVIRONMENT.md`](benchmark/ENVIRONMENT.md).
 - Ollama uses `/api/chat` with `think: false` (localhost HTTP overhead). 3.8 fair 4-bit tag is `qwen3.8:27b-q4_K_M`; `27b-mlx` is NVFP4 (same digest as `27b-nvfp4`). 3.6 tags are GGUF-Q4_K_M.
@@ -191,7 +193,13 @@ HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_dflash2.py "Write a 
 MAX_TOKENS=512 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_dflash2.py "Your prompt"
 ```
 
-Env: `TARGET`, `DRAFT`, `DRAFT_BITS` (default 4), `BLOCK_SIZE` (default capped at 5 for int4), `MAX_TOKENS`.
+Env: `TARGET`, `DRAFT`, `DRAFT_BITS` (default 4), `BLOCK_SIZE` (default capped at 5 for int4), `MAX_TOKENS`, `MAX_CONTEXT` (default **8192** — 100k KV jetsams 32 GB UMA).
+
+Safe context check (does not load weights):
+
+```bash
+HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/validate_dflash2_context.py --target-tokens 8192
+```
 
 **Qwen 3.5 / DDTree (legacy):**
 
@@ -314,7 +322,7 @@ local-qwen/
 |-------|---------------|------|-------|
 | Target (27B dense, 3.8) | `mlx-community/Qwen3.8-27B-4bit` | ~16 GB | Newest dense; mlx-lm ~6.6 tok/s this session |
 | Drafter (27B dense, 3.8) | `z-lab/Qwen3.8-27B-DFlash2` | ~3.6 GB | Official `dflash2-mlx` + DDTree drafter; not an Ollama target |
-| GGUF (27B, 3.8) | `unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL` | ~15 GB | llama.cpp 4-bit |
+| GGUF (27B, 3.8) | `unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL` | ~17 GB | llama.cpp Unsloth Dynamic; 4.1 tok/s in session `162554Z` |
 | Ollama (27B, 3.8, 4-bit) | `qwen3.8:27b-q4_K_M` | ~17 GB | Full 27.3B Q4_K_M; 5.7 tok/s in session `192413Z` |
 | Ollama (27B, 3.8, NVFP4) | `qwen3.8:27b-mlx` | ~18 GB | Same digest as `27b-nvfp4`; 17.2 tok/s in session 044632Z |
 | Target (35B MoE) | `mlx-community/Qwen3.6-35B-A3B-4bit-DWQ` | 20.7 GB | Best MLX decode (32.8 tok/s) |

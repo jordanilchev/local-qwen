@@ -9,10 +9,13 @@ os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark.dflash2 import (
     DEFAULT_DFLASH2_DRAFT_BITS,
+    DEFAULT_MAX_CONTEXT,
     MLX_INT4_MAX_BLOCK_SIZE,
     is_dflash2_config,
+    kv_cache_bytes,
     load_dflash2_draft,
     mlx_dflash2_block_size,
+    require_context_fits,
 )
 from ddtree_mlx.runtime import (
     _draft_block_size,
@@ -25,6 +28,28 @@ DFLASH2_REF = "z-lab/Qwen3.8-27B-DFlash2"
 _HUB = Path.home() / "Models/HuggingFace/hub/models--z-lab--Qwen3.8-27B-DFlash2"
 _CONFIGS = sorted(_HUB.glob("snapshots/*/config.json"))
 CONFIG_PATH = _CONFIGS[-1] if _CONFIGS else Path("/nonexistent")
+
+
+def test_qwen38_100k_kv_exceeds_32gb_uma():
+    """Fanless 32GB crash: 100k tokens of GQA KV plus ~20GB weights do not fit."""
+    kv = kv_cache_bytes(100_000)
+    weights = 20 * 1024**3
+    assert kv > 20 * 1024**3
+    assert kv + weights > 32 * 1024**3
+
+
+def test_default_max_context_fits_32gb_with_dflash2_weights():
+    assert DEFAULT_MAX_CONTEXT == 8192
+    kv = kv_cache_bytes(DEFAULT_MAX_CONTEXT)
+    assert kv + 20 * 1024**3 < 32 * 1024**3
+
+
+def test_require_context_fits_rejects_100k():
+    import pytest
+
+    with pytest.raises(ValueError, match="100"):
+        require_context_fits(100_000)
+    require_context_fits(DEFAULT_MAX_CONTEXT)
 
 
 def test_mlx_int4_caps_dflash2_block_size_at_5():

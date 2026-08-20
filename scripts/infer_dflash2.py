@@ -17,11 +17,17 @@ if str(_ROOT) not in sys.path:
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/Models/HuggingFace"))
 
 from benchmark._lib import apply_chat_prompt, set_benchmark_seed
-from benchmark.dflash2 import DEFAULT_DFLASH2_DRAFT_BITS, load_dflash2_mlx_runtime
+from benchmark.dflash2 import (
+    DEFAULT_DFLASH2_DRAFT_BITS,
+    DEFAULT_MAX_CONTEXT,
+    load_dflash2_mlx_runtime,
+    require_context_fits,
+)
 
 TARGET = os.environ.get("TARGET", "mlx-community/Qwen3.8-27B-4bit")
 DRAFT = os.environ.get("DRAFT", "z-lab/Qwen3.8-27B-DFlash2")
 MAX_NEW_TOKENS = int(os.environ.get("MAX_TOKENS", "2048"))
+MAX_CONTEXT = int(os.environ.get("MAX_CONTEXT", str(DEFAULT_MAX_CONTEXT)))
 DRAFT_BITS = int(os.environ.get("DRAFT_BITS", str(DEFAULT_DFLASH2_DRAFT_BITS)))
 
 
@@ -36,6 +42,12 @@ def run(prompt: str) -> None:
 
     set_benchmark_seed()
     prompt_str = apply_chat_prompt(tokenizer, prompt)
+    prompt_tokens = len(tokenizer.encode(prompt_str))
+    require_context_fits(prompt_tokens)
+    if prompt_tokens > MAX_CONTEXT:
+        raise SystemExit(
+            f"Prompt is {prompt_tokens:,} tokens; MAX_CONTEXT is {MAX_CONTEXT:,}."
+        )
 
     t0 = time.perf_counter()
     t_first: float | None = None
