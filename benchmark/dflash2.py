@@ -10,7 +10,8 @@ because of int4 matmul limits. Cap `block_size` and quantize the draft so
 target (~16 GB) + draft (~4 GB) fits 32 GB UMA.
 
 100k context **will jetsam a 32 GB Mac**: Qwen3.8 GQA KV is ~256 KiB/token
-(fp16), so 100k ≈ 24 GB KV on top of ~20 GB weights. Default context is 8k.
+(fp16), so 100k ≈ 24 GB KV on top of ~20 GB weights. Default context is 32k
+(~8 GB KV, ~4 GB OS reserve).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from typing import Any, Optional
 
 MLX_INT4_MAX_BLOCK_SIZE = 5
 DEFAULT_DFLASH2_DRAFT_BITS = 4
-DEFAULT_MAX_CONTEXT = 8192
+DEFAULT_MAX_CONTEXT = 32768
 DEFAULT_MAX_NEW_TOKENS = 2048
 
 # Qwen3.8-27B text: 64 layers, GQA 4 KV heads, head_dim 256, fp16 KV.
@@ -27,7 +28,7 @@ QWEN38_KV_HEADS = 4
 QWEN38_HEAD_DIM = 256
 QWEN38_KV_BYTES_PER_ELEM = 2
 DFLASH2_WEIGHTS_BYTES = 20 * 1024**3
-OS_RESERVE_BYTES = 6 * 1024**3
+OS_RESERVE_BYTES = 4 * 1024**3
 UMA_32GB_BYTES = 32 * 1024**3
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate DFlash2 MLX prefill + decode at a context that fits 32 GB UMA.
 
-Default 8192 tokens. 100k is refused before loading weights (~24 GB KV + 20 GB model).
+Default 32768 tokens. 100k is refused before loading weights (~24 GB KV + 20 GB model).
 """
 from __future__ import annotations
 

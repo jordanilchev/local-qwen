@@ -45,7 +45,7 @@ Do not mix with the NVFP4 Ollama row above. DFlash2 + Ollama Q4 share session `2
 | Ollama | GGUF-Q4_K_M | 5.7 | 755 | 1.00× | `qwen3.8:27b-q4_K_M` (full 27.3B) |
 | llama.cpp (Unsloth) | UD-Q4_K_XL | 4.1 | 2040 | 0.72× | [unsloth/Qwen3.8-27B-GGUF](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) |
 
-DFlash2 acceptance ~4.2 tokens/block (~2.5× plain MLX 6.6 from session `044632Z`). Unsloth Dynamic GGUF is quality-oriented; on this chip it is slower than Ollama Q4 and far behind DFlash2. **Context cap:** default `MAX_CONTEXT=8192` — 100k tokens ≈ 24 GB KV + ~20 GB weights and jetsams 32 GB UMA.
+DFlash2 acceptance ~4.2 tokens/block (~2.5× plain MLX 6.6 from session `044632Z`). Unsloth Dynamic GGUF is quality-oriented; on this chip it is slower than Ollama Q4 and far behind DFlash2. **Context cap:** default `MAX_CONTEXT=32768` (~8 GB KV, ~4 GB OS reserve) — 100k tokens ≈ 24 GB KV + ~20 GB weights and jetsams 32 GB UMA.
 
 ### Qwen 3.6 — 35B MoE
 
@@ -102,7 +102,7 @@ No thermal split this session: plain MLX and vllm-mlx held ~6.6 tok/s on all thr
 - **llama.cpp MTP is a small bump over its own baseline** (5.3 vs 5.1, ~90% draft accept) and is behind Ollama and MLX on 3.6-27B. 3.8 Unsloth baseline is 4.1 tok/s (no MTP GGUF benched).
 - **OptiQ is no longer a disaster:** 5.6 vs uniform int4 6.6 tok/s (−15%), vs 2.6 tok/s in the May mixed-session tables.
 - **MoE vs dense (plain MLX):** 32.8 tok/s (35B) vs 6.6 tok/s (both 27B dense models) — still ~5× on this chip.
-- **32 GB context limit:** Qwen3.8 KV ≈ 256 KiB/token; 100k tokens ≈ 24 GB KV + ~20 GB DFlash2 weights jetsams the machine. Default `MAX_CONTEXT=8192`.
+- **32 GB context limit:** Qwen3.8 KV ≈ 256 KiB/token; 100k tokens ≈ 24 GB KV + ~20 GB DFlash2 weights jetsams the machine. Default `MAX_CONTEXT=32768`.
 
 ### Methodology / caveats
 
@@ -193,12 +193,12 @@ HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_dflash2.py "Write a 
 MAX_TOKENS=512 HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/infer_dflash2.py "Your prompt"
 ```
 
-Env: `TARGET`, `DRAFT`, `DRAFT_BITS` (default 4), `BLOCK_SIZE` (default capped at 5 for int4), `MAX_TOKENS`, `MAX_CONTEXT` (default **8192** — 100k KV jetsams 32 GB UMA).
+Env: `TARGET`, `DRAFT`, `DRAFT_BITS` (default 4), `BLOCK_SIZE` (default capped at 5 for int4), `MAX_TOKENS`, `MAX_CONTEXT` (default **32768** — 100k KV jetsams 32 GB UMA).
 
 Safe context check (does not load weights):
 
 ```bash
-HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/validate_dflash2_context.py --target-tokens 8192
+HF_HOME=~/Models/HuggingFace .venv/bin/python scripts/validate_dflash2_context.py --target-tokens 32768
 ```
 
 **Qwen 3.5 / DDTree (legacy):**
@@ -305,7 +305,7 @@ local-qwen/
 │   └── results/                      # JSON output, one file per (method, model[, budget])
 ├── scripts/
 │   ├── infer_dflash2.py     # Qwen3.8 int4 + official DFlash2 (recommended for coding)
-│   ├── validate_dflash2_context.py  # Refuse unsafe contexts before load (default 8k)
+│   ├── validate_dflash2_context.py  # Refuse unsafe contexts before load (default 32k)
 │   ├── dflash2_server.py    # OpenAI-compatible server for Cursor (port 8007)
 │   ├── infer_ddtree.py      # Interactive single-turn inference (DDTree / 3.5)
 │   └── ddtree_server.py     # OpenAI-compatible server (port 8006, DDTree)

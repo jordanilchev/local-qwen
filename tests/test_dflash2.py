@@ -39,9 +39,11 @@ def test_qwen38_100k_kv_exceeds_32gb_uma():
 
 
 def test_default_max_context_fits_32gb_with_dflash2_weights():
-    assert DEFAULT_MAX_CONTEXT == 8192
+    assert DEFAULT_MAX_CONTEXT == 32768
     kv = kv_cache_bytes(DEFAULT_MAX_CONTEXT)
     assert kv + 20 * 1024**3 < 32 * 1024**3
+    # ~4 GB left for OS / Cursor / browser under the UMA budget.
+    assert 32 * 1024**3 - kv - 20 * 1024**3 >= 4 * 1024**3
 
 
 def test_require_context_fits_rejects_100k():
