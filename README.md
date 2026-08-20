@@ -305,6 +305,7 @@ local-qwen/
 │   └── results/                      # JSON output, one file per (method, model[, budget])
 ├── scripts/
 │   ├── infer_dflash2.py     # Qwen3.8 int4 + official DFlash2 (recommended for coding)
+│   ├── validate_dflash2_context.py  # Refuse unsafe contexts before load (default 8k)
 │   ├── dflash2_server.py    # OpenAI-compatible server for Cursor (port 8007)
 │   ├── infer_ddtree.py      # Interactive single-turn inference (DDTree / 3.5)
 │   └── ddtree_server.py     # OpenAI-compatible server (port 8006, DDTree)
